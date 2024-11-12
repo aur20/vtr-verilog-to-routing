@@ -1,3 +1,9 @@
+# Changes
+
+We try to improve placement, specifically initial placement, by analysing the graph -- to find the critical path -- before placement. Then we will place the most important node (which is on critical path and has highest connectivity) in the middle of the architecture. Next adjacent nodes are placed close to important nodes.
+
+The final CPD after SA stays roughly the same but we hope to reduce placement time.
+
 # Verilog to Routing (VTR)
 [![Gitpod Ready-to-Code](https://img.shields.io/badge/Gitpod-Ready--to--Code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/verilog-to-routing/vtr-verilog-to-routing.git)
 [![Build Status](https://github.com/verilog-to-routing/vtr-verilog-to-routing/workflows/Test/badge.svg)](https://github.com/verilog-to-routing/vtr-verilog-to-routing/actions?query=workflow%3ATest) [![Documentation Status](https://readthedocs.org/projects/vtr/badge/?version=latest)](http://docs.verilogtorouting.org/en/latest/)
