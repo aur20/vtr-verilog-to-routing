@@ -57,6 +57,11 @@ option(ODIN_WARN "Enable building odin with extra warning flags" OFF)
 option(ODIN_COVERAGE "Enable building odin with coverage flags" OFF)
 option(ODIN_TIDY "Enable building odin with clang tidy" OFF)
 option(ODIN_SANITIZE "Enable building odin with sanitize flags" OFF)
+option(MARKUS_AT_WORK "Use alternative Stroobandt placement" OFF)
+option(MARKUS_AT_PRINTER "I do have lots of debugging prints" OFF)
+
+add_compile_definitions(MARKUS_AT_WORK=$<BOOL:${MARKUS_AT_WORK}>)
+add_compile_definitions(MARKUS_AT_PRINTER=$<BOOL:${MARKUS_AT_PRINTER}>)
 
 # Allow the user to enable building Yosys
 option(WITH_PARMYS "Enable Yosys as elaborator and parmys-plugin as partial mapper" ON)

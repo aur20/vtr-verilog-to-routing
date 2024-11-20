@@ -11,6 +11,23 @@ class NocCostHandler;
 #include "vpr_types.h"
 #include "vtr_vector_map.h"
 
+#ifdef MARKUS_AT_WORK
+    #if MARKUS_AT_WORK == 1
+        #warning "Markus is meddling your codebase"
+    #endif
+#else
+    #define MARKUS_AT_WORK 0
+#endif
+
+#ifdef MARKUS_AT_PRINTER
+    #if MARKUS_AT_PRINTER == 1
+        #warning "Markus is at the printer"
+    #endif
+    #define VTR_LOG_MARKUS(...) VTR_LOGV(MARKUS_AT_PRINTER, __VA_ARGS__)
+#else
+    #define VTR_LOG_MARKUS(...) VTR_LOGV(0, __VA_ARGS__)
+#endif
+
 class BlkLocRegistry;
 
 /* The maximum number of tries when trying to place a macro at a
@@ -34,6 +51,13 @@ struct t_block_score {
 
     //The number of placed block during initial placement that are connected to the this block.
     int number_of_placed_connections = 0;
+
+#ifdef MARKUS_AT_WORK
+    std::set<ClusterBlockId> parents;
+    std::set<ClusterBlockId> children;
+    std::set<ClusterBlockId> longpathparents;
+    int longest_path;
+#endif
 };
 
 /**

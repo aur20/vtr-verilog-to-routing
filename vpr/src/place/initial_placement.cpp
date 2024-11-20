@@ -13,10 +13,11 @@
 #include "move_utils.h"
 #include "region.h"
 #include "noc_place_utils.h"
+#include "closest_points.h"
 
 #include <cmath>
 #include <optional>
-
+#include <algorithm>
 
 #ifdef VERBOSE
 void print_clb_placement(const char* fname);
@@ -314,7 +315,11 @@ static bool is_loc_legal(const t_pl_loc& loc,
             continue;
         }
 
+    #if MARKUS_AT_WORK == 1
+        if (reg_rect.coincident({loc.x, loc.y})) {
+    #else
         if (reg_rect.contains({loc.x, loc.y})) {
+    #endif
             //check if the location is compatible with the block type
             const auto& type = grid.get_physical_type({loc.x, loc.y, loc.layer});
             int height_offset = grid.get_height_offset({loc.x, loc.y, loc.layer});
@@ -471,6 +476,16 @@ static std::vector<ClusterBlockId> find_centroid_loc(const t_pl_macro& pl_macro,
     if (acc_weight > 0) {
         centroid.x = acc_x / acc_weight;
         centroid.y = acc_y / acc_weight;
+    #if MARKUS_AT_WORK == 1
+        // I will fill empty locations from right to left, against the clock,
+        // so starting from the rightmost location seems appropriate
+        if (acc_weight * centroid.x < acc_x) {
+            centroid.x += 1;
+        }
+        if (acc_weight * centroid.y < acc_y) {
+            centroid.y += 1;
+        }
+    #endif
         if (find_layer) {
             auto max_element = std::max_element(layer_count.begin(), layer_count.end());
             VTR_ASSERT((*max_element) != 0);
@@ -482,6 +497,183 @@ static std::vector<ClusterBlockId> find_centroid_loc(const t_pl_macro& pl_macro,
 
     return connected_blocks_to_update;
 }
+
+#if MARKUS_AT_WORK == 1
+static bool try_stroobandt_placement(const t_pl_macro& pl_macro,
+                                   const PartitionRegion& pr,
+                                   t_logical_block_type_ptr block_type,
+                                   e_pad_loc_type pad_loc_type,
+                                   vtr::vector<ClusterBlockId, t_block_score>& block_scores,
+                                   BlkLocRegistry& blk_loc_registry,
+                                   vtr::RngContainer& rng) {
+    auto& block_locs = blk_loc_registry.mutable_block_locs();
+    const GridBlock& grid_blocks = blk_loc_registry.grid_blocks();
+
+    t_pl_loc centroid_loc(OPEN, OPEN, 0, 0); // I only care about layer 0, die 0
+    std::vector<ClusterBlockId> unplaced_blocks_to_update_their_score;
+
+    unplaced_blocks_to_update_their_score = find_centroid_loc(pl_macro, centroid_loc, blk_loc_registry);
+
+    // Put the first block in the mid
+    auto& device_ctx = g_vpr_ctx.mutable_device();
+    if (centroid_loc.x == OPEN)
+        centroid_loc.x = device_ctx.grid.width() >> 1;
+    if (centroid_loc.y == OPEN)
+        centroid_loc.y = device_ctx.grid.height() >> 1;
+
+    std::vector<t_pl_loc> locations;
+    ClosestPointsIterator position(centroid_loc.x, centroid_loc.y);
+    int od = 0;
+    int searchspace = 0;
+    for (searchspace = 0; searchspace < 49; ++searchspace) { // some random 7x7 field
+        t_pl_loc temp_loc = {0, 0, centroid_loc.layer, centroid_loc.sub_tile};
+        temp_loc.x = std::clamp((*position).first, 0, (int) device_ctx.grid.width() - 1);
+        temp_loc.y = std::clamp((*position).second, 0, (int) device_ctx.grid.height() - 1);
+        if (temp_loc.x == 0 && (temp_loc.y == 0 || temp_loc.y == (int) device_ctx.grid.height() - 1))
+            temp_loc.x = 1;
+        if (temp_loc.x == (int) device_ctx.grid.width() - 1 && (temp_loc.y == 0 || temp_loc.y == (int) device_ctx.grid.height() - 1))
+            temp_loc.x -= 1;
+        VTR_LOG_MARKUS("\t\t\t\tSearching at %d x %d, %d, %d\n", temp_loc.x, temp_loc.y, temp_loc.layer, temp_loc.sub_tile);
+        int nd = (temp_loc.x - centroid_loc.x) * (temp_loc.x - centroid_loc.x) + (temp_loc.y - centroid_loc.y) * (temp_loc.y - centroid_loc.y);
+        if (locations.size() > 0 && nd > od) {
+            break;
+        }
+        if (grid_blocks.block_at_location(temp_loc) == ClusterBlockId::INVALID() &&
+            macro_can_be_placed(pl_macro, temp_loc, /*check_all_legality=*/false, blk_loc_registry)) {
+            locations.push_back(temp_loc);
+            od = nd;
+        }
+
+        ++position;
+    }
+
+    // Find the position which has least neighbours
+    if (locations.size() == 0)
+        return false;
+    bool furthest_pos = (locations.size() == 1);
+    if (!furthest_pos) {
+        searchspace = 1;
+        int equal_results = 0;
+        for (const auto& loc : locations) {
+            VTR_LOG_MARKUS("\t\t\t\tFound possible locations %d x %d, %d, %d\n", loc.x, loc.y, loc.layer, loc.sub_tile);
+        }
+        std::vector<t_pl_loc> furthest_locations = locations;
+        while(!furthest_pos) {
+            int neighbours = 0;
+            for (const auto& loc : furthest_locations) {
+                int temp_neighbours = 0;
+                for (int x = -searchspace; x <= searchspace; ++x) {
+                    for (int y = -searchspace; y <= searchspace; ++y) {
+                        if (x == 0 && y == 0)
+                            continue;
+                        t_physical_tile_loc temp_loc = {loc.x + x, loc.y + y, loc.layer};
+                        if (temp_loc.x < 0 || temp_loc.x >= (int) device_ctx.grid.width() || temp_loc.y < 0 || temp_loc.y >= (int) device_ctx.grid.height())
+                            continue;
+                        if (temp_loc.x == 0 && (temp_loc.y == 0 || temp_loc.y == (int) device_ctx.grid.height() - 1))
+                            continue;
+                        if (temp_loc.x == (int) device_ctx.grid.width() - 1 && (temp_loc.y == 0 || temp_loc.y == (int) device_ctx.grid.height() - 1))
+                            continue;
+                        t_pl_loc pl_loc = {temp_loc.x, temp_loc.y, loc.layer, loc.sub_tile};
+                        ClusterBlockId relative_block = grid_blocks.block_at_location(pl_loc);
+                        bool is_relative = false;
+                        for (const auto& members : pl_macro.members) {
+                            ClusterBlockId blk_id = members.blk_index;
+                            for (const auto& relative : block_scores[blk_id].children) {
+                                if (relative_block == relative) {
+                                    is_relative = true;
+                                    break;
+                                }
+                            }
+                            for (const auto& relative : block_scores[blk_id].parents) {
+                                if (relative_block == relative) {
+                                    is_relative = true;
+                                    break;
+                                }
+                            }
+                            if (is_relative)
+                                break;
+                        }
+                        if (is_relative) {
+                            temp_neighbours -= grid_blocks.get_usage(temp_loc);
+                        } else {
+                            temp_neighbours += grid_blocks.get_usage(temp_loc);
+                        }
+                    }
+                }
+                if (temp_neighbours < neighbours) {
+                    neighbours = temp_neighbours;
+                    furthest_locations.clear();
+                    furthest_locations.push_back(loc);
+                } else if (temp_neighbours == neighbours) {
+                    furthest_locations.push_back(loc);
+                }
+            }
+            if (furthest_locations.size() == 1) {
+                furthest_pos = true;
+                equal_results = 0;
+            } else {
+                searchspace++;
+                equal_results++;
+                if (equal_results > 3) {
+                    furthest_pos = true;
+                }
+            }
+        }
+        centroid_loc = furthest_locations[0];
+    } else {
+        centroid_loc = locations[0];
+    }
+
+    //no suggestion was available for this block type
+    if (!is_loc_on_chip({centroid_loc.x, centroid_loc.y, centroid_loc.layer})) {
+        return false;
+    }
+
+    //centroid suggestion was either occupied or does not match block type
+    //try to find a near location that meet these requirements
+    bool neighbor_legal_loc = false;
+    if (!is_loc_legal(centroid_loc, pr, block_type)) {
+        VTR_LOG_MARKUS("\t\t\t\tThat position was illegal...\n");
+        neighbor_legal_loc = find_centroid_neighbor(centroid_loc, block_type, false, blk_loc_registry, rng);
+        if (!neighbor_legal_loc) { //no neighbor candidate found
+            return false;
+        }
+        VTR_LOG_MARKUS("\t\t\t\tChanged to %d x %d, %d, %d\n", centroid_loc.x, centroid_loc.y, centroid_loc.layer, centroid_loc.sub_tile);
+    }
+
+
+    //no neighbor were found that meet all our requirements, should be placed with random placement
+    if (!is_loc_on_chip({centroid_loc.x, centroid_loc.y, centroid_loc.layer}) || !pr.is_loc_in_part_reg(centroid_loc)) {
+        return false;
+    }
+
+    //choose the location's subtile if the centroid location is legal.
+    //if the location is found within the "find_centroid_neighbor", it already has a subtile
+    //we don't need to find one again
+    if (!neighbor_legal_loc) {
+        const auto& compressed_block_grid = g_vpr_ctx.placement().compressed_block_grids[block_type->index];
+        const auto& type = device_ctx.grid.get_physical_type({centroid_loc.x, centroid_loc.y, centroid_loc.layer});
+        const auto& compatible_sub_tiles = compressed_block_grid.compatible_sub_tile_num(type->index);
+        centroid_loc.sub_tile = compatible_sub_tiles[rng.irand((int)compatible_sub_tiles.size() - 1)];
+    }
+    int width_offset = device_ctx.grid.get_width_offset({centroid_loc.x, centroid_loc.y, centroid_loc.layer});
+    int height_offset = device_ctx.grid.get_height_offset({centroid_loc.x, centroid_loc.y, centroid_loc.layer});
+    VTR_ASSERT(width_offset == 0);
+    VTR_ASSERT(height_offset == 0);
+
+    bool legal = try_place_macro(pl_macro, centroid_loc, blk_loc_registry);
+
+    if (legal) {
+        fix_IO_block_types(pl_macro, centroid_loc, pad_loc_type, block_locs);
+
+        //after placing the current block, its connections' score must be updated.
+        for (ClusterBlockId blk_id : unplaced_blocks_to_update_their_score) {
+            block_scores[blk_id].number_of_placed_connections++;
+        }
+    }
+    return legal;
+}
+#endif
 
 static bool try_centroid_placement(const t_pl_macro& pl_macro,
                                    const PartitionRegion& pr,
@@ -926,6 +1118,13 @@ static bool place_macro(int macros_max_num_tries,
         macro_placed = try_dense_placement(pl_macro, pr, block_type, pad_loc_type, blk_types_empty_locs_in_grid, blk_loc_registry);
     }
 
+#if MARKUS_AT_WORK == 1
+    if (!macro_placed) {
+        VTR_LOGV_DEBUG(g_vpr_ctx.placement().f_placer_debug, "\t\t\tTry stroobandt placement\n");
+        macro_placed = try_stroobandt_placement(pl_macro, pr, block_type, pad_loc_type, block_scores, blk_loc_registry, rng);
+    }
+#endif
+
     if (!macro_placed) {
         VTR_LOGV_DEBUG(g_vpr_ctx.placement().f_placer_debug, "\t\t\tTry centroid placement\n");
         macro_placed = try_centroid_placement(pl_macro, pr, block_type, pad_loc_type, block_scores, blk_loc_registry, rng);
@@ -948,6 +1147,9 @@ static bool place_macro(int macros_max_num_tries,
         VTR_LOGV_DEBUG(g_vpr_ctx.placement().f_placer_debug, "\t\t\tTry exhaustive placement\n");
         macro_placed = try_place_macro_exhaustively(pl_macro, pr, block_type, pad_loc_type, blk_loc_registry);
     }
+
+    VTR_LOGV_DEBUG(g_vpr_ctx.placement().f_placer_debug, "\t\t\tBlock %s is going to be placed at x %d - y %d, layer %d, die %d\n", cluster_ctx.clb_nlist.block_name(blk_id).c_str(), block_locs[blk_id].loc.x, block_locs[blk_id].loc.y, block_locs[blk_id].loc.layer, block_locs[blk_id].loc.sub_tile);
+
     return macro_placed;
 }
 
@@ -990,6 +1192,104 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
         }
     }
 
+#if MARKUS_AT_WORK == 1
+    vtr::ScopedStartFinishTimer timer("Stroobandt-analysis of graph");
+    // Iterate through all blocks in the netlist to filter relevant information
+    std::list<ClusterBlockId> reds;
+    std::string redname = "red";
+    std::string ioname = "io";
+    std::list<ClusterBlockId> blacks;
+    std::string blackname = "black";
+
+    for (const auto& blk_id : cluster_ctx.clb_nlist.blocks()) {
+        // Get the block type (e.g., LUT, Flip-Flop, etc.)
+        auto blk_type = cluster_ctx.clb_nlist.block_type(blk_id);
+        // Get the block name (optional, for debugging/logging)
+        std::string blk_name = cluster_ctx.clb_nlist.block_name(blk_id);
+
+        // Print or log the block name and type
+        VTR_LOG_MARKUS(" Found some block: %s (%s)\t", blk_name.c_str(), blk_type->name.c_str() );
+        // if (redname.find(blk_type->name) != std::string::npos || ioname.find(blk_type->name) != std::string::npos)
+        std::string modename = "";
+        if (cluster_ctx.clb_nlist.block_pb(blk_id)->has_modes()) {
+            modename = std::string(cluster_ctx.clb_nlist.block_pb(blk_id)->get_mode()->name);
+        }
+        if (blk_type->name.find(redname) != std::string::npos ||
+            blk_type->name.find(ioname)  != std::string::npos ||
+            modename.find(redname)       != std::string::npos ||
+            !cluster_ctx.clb_nlist.block_is_combinational(blk_id) )
+        {
+            reds.push_back(blk_id);
+            VTR_LOG_MARKUS("(red)");
+        }
+        // else if (blackname.find(blk_type->name) != std::string::npos)
+        else
+        {
+            blacks.push_back(blk_id);
+            VTR_LOG_MARKUS("(black)");
+        }
+        VTR_LOG_MARKUS("\n");
+        // else
+        //     vpr_throw(VPR_ERROR_OTHER,
+        //         __FILE__, __LINE__,
+        //         "[Fix this error] I can only deal with clb_red, clb_black, and IOs but got: %s\n", blk_type->name);
+    }
+    VTR_LOG_MARKUS("Found [%d] red nodes and [%d] black nodes.\n", reds.size(), blacks.size());
+
+    std::function<void(const ClusterBlockId& blk_id, int pathlength)> followToRed = [&](const ClusterBlockId& blk_id, int pathlength) {
+        for (const auto pin : cluster_ctx.clb_nlist.block_pins(blk_id)) {
+            if (cluster_ctx.clb_nlist.pin_type(pin) == PinType::DRIVER) {
+                const auto net_id = cluster_ctx.clb_nlist.pin_net(pin);
+                const auto& driver = cluster_ctx.clb_nlist.net_driver_block(net_id);
+                if (blk_id == driver) {
+                    for (const auto& sink : cluster_ctx.clb_nlist.net_sinks(net_id)) {
+                        const auto& child = cluster_ctx.clb_nlist.pin_block(sink);
+                        // Forward calculation
+                        block_scores[blk_id].children.insert(child);
+                        block_scores[child].parents.insert(blk_id);
+                        if (pathlength > block_scores[child].longest_path) {
+                            block_scores[child].longest_path = pathlength;
+                            block_scores[child].longpathparents.clear();
+                            block_scores[child].longpathparents.insert(blk_id);
+                            // Abort if red node
+                            if (std::find(reds.begin(), reds.end(), child) != reds.end())
+                                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(child).c_str());
+                            else
+                                followToRed(child, pathlength + 1);
+                        } else if (pathlength == block_scores[child].longest_path) {
+                            block_scores[child].longpathparents.insert(blk_id);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    for (const auto& blk_id : reds) {
+        VTR_LOG_MARKUS("Going from red node %s to ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+        followToRed(blk_id, 1);
+        VTR_LOG_MARKUS("\n");
+    }
+
+    std::function<void(const ClusterBlockId& blk_id)> followLongestBackwards =[&](const ClusterBlockId& blk_id) {
+        for (const ClusterBlockId& parent : block_scores[blk_id].longpathparents) {
+            if (std::find(reds.begin(), reds.end(), parent) != reds.end())
+                continue;
+            if (block_scores[parent].longest_path < block_scores[blk_id].longest_path) {
+                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(parent).c_str());
+                block_scores[parent].longest_path = block_scores[blk_id].longest_path; // std::max(block_scores[blk_id].longest_path, block_scores[parent].longest_path);
+                followLongestBackwards(parent);
+            }
+        }
+    };
+
+    for (const auto& blk_id : reds) {
+        VTR_LOG_MARKUS("Backpropagation from red node %s to ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+        followLongestBackwards(blk_id);
+        VTR_LOG_MARKUS("\n");
+    }
+#endif
+
     return block_scores;
 }
 
@@ -1013,6 +1313,19 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
     auto criteria = [&block_scores](ClusterBlockId lhs, ClusterBlockId rhs) {
         int lhs_score = block_scores[lhs].macro_size + block_scores[lhs].number_of_placed_connections + SORT_WEIGHT_PER_TILES_OUTSIDE_OF_PR * block_scores[lhs].tiles_outside_of_floorplan_constraints + SORT_WEIGHT_PER_FAILED_BLOCK * block_scores[lhs].failed_to_place_in_prev_attempts;
         int rhs_score = block_scores[rhs].macro_size + block_scores[rhs].number_of_placed_connections + SORT_WEIGHT_PER_TILES_OUTSIDE_OF_PR * block_scores[rhs].tiles_outside_of_floorplan_constraints + SORT_WEIGHT_PER_FAILED_BLOCK * block_scores[rhs].failed_to_place_in_prev_attempts;
+
+    #if MARKUS_AT_WORK == 1
+        if (block_scores[lhs].number_of_placed_connections != block_scores[rhs].number_of_placed_connections) // prefer nodes which are relative to placed nodes
+            return block_scores[lhs].number_of_placed_connections < block_scores[rhs].number_of_placed_connections;
+        if (block_scores[lhs].longest_path != block_scores[rhs].longest_path) // by Pathlength
+            return block_scores[lhs].longest_path < block_scores[rhs].longest_path;
+        if (block_scores[lhs].parents.size() + block_scores[lhs].children.size() != block_scores[rhs].parents.size() + block_scores[rhs].children.size()) // by Connectivity
+            return block_scores[lhs].parents.size() + block_scores[lhs].children.size() < block_scores[rhs].parents.size() + block_scores[rhs].children.size();
+        if (block_scores[lhs].children.size() != block_scores[rhs].children.size()) // by Fanout
+            return block_scores[lhs].children.size() < block_scores[rhs].children.size();
+        if (block_scores[lhs].parents.size() != block_scores[rhs].parents.size()) // by Fanin
+            return block_scores[lhs].parents.size() < block_scores[rhs].parents.size();
+    #endif
 
         return lhs_score < rhs_score;
     };
@@ -1045,6 +1358,7 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
 
         while (!heap_blocks.empty()) {
+            std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
             std::pop_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
             auto blk_id = heap_blocks.back();
             heap_blocks.pop_back();

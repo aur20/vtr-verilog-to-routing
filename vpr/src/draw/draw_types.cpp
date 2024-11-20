@@ -22,6 +22,15 @@ ezgl::color t_draw_state::block_color(ClusterBlockId blk) const {
         } else { // Have placement, select physical tile implementing blk
             t_pl_loc block_loc = block_locs[blk].loc;
             tile_type = physical_tile_type(block_loc);
+
+            const t_pb* pb = g_vpr_ctx.clustering().clb_nlist.block_pb(blk);
+            if (pb->has_modes() && pb->get_mode() != nullptr) {
+                std::string color(pb->get_mode()->name);
+                if (color.find("red") != std::string::npos)
+                    return blk_INDIANRED;
+                // if (color.find("black") != std::string::npos)
+                //     return ezgl::color(34, 34, 34);    //black
+            }
         }
         VTR_ASSERT(tile_type != nullptr);
         return get_block_type_color(tile_type);
