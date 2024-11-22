@@ -1356,9 +1356,12 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
 
         std::vector<ClusterBlockId> heap_blocks(blocks.begin(), blocks.end());
         std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
+        #if MARKUS_AT_WORK == 1
+            std::vector<ClusterBlockId> first_blocks;
+            int pathlength = 1;
+        #endif
 
         while (!heap_blocks.empty()) {
-            std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
             std::pop_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
             auto blk_id = heap_blocks.back();
             heap_blocks.pop_back();
@@ -1370,16 +1373,26 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
             }
 
             VTR_LOGV_DEBUG(g_vpr_ctx.placement().f_placer_debug, "Popped Block %d\n", size_t(blk_id));
+        #if MARKUS_AT_WORK == 1
+            if (first_blocks.size() < pathlength) {
+                first_blocks.push_back(blk_id);
+                pathlength = block_scores[blk_id].longest_path;
+            }
+        #endif
 
             blocks_placed_since_heap_update++;
 
             bool block_placed = place_one_block(blk_id, pad_loc_type, &blk_types_empty_locs_in_grid[blk_id_type->index], &block_scores, blk_loc_registry, rng);
 
             //update heap based on update_heap_freq calculated above
+        #if MARKUS_AT_WORK == 1
+            std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
+        #else
             if (blocks_placed_since_heap_update % (update_heap_freq) == 0) {
                 std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
                 blocks_placed_since_heap_update = 0;
             }
+        #endif
 
             if (!block_placed) {
                 VTR_LOGV_DEBUG(g_vpr_ctx.placement().f_placer_debug, "Didn't find a location the block\n", size_t(blk_id));
@@ -1396,6 +1409,13 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         //current iteration could place all of design's blocks, initial placement succeed
         if (number_of_unplaced_blks_in_curr_itr == 0) {
             VTR_LOG("Initial placement iteration %d has finished successfully\n", iter_no);
+        #if MARKUS_AT_WORK == 1
+            VTR_LOG("First blocks placed were: ");
+            for (const auto& blk_id : first_blocks) {
+                VTR_LOG("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+            }
+            VTR_LOG("\n");
+        #endif
             return;
         }
 

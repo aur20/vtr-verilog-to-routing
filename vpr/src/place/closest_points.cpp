@@ -1,4 +1,5 @@
 #include "closest_points.h"
+#include <cmath>
 
 ClosestPointsIterator::ClosestPointsIterator() : origin{0, 0} {
     // Initialize with the origin (0, 0)
@@ -24,7 +25,7 @@ ClosestPointsIterator& ClosestPointsIterator::operator++() {
     for (const auto& [dx, dy] : directions) {
         int nx = x + dx, ny = y + dy;
         if (!visited.count({nx, ny})) { // Check if the point is visited
-            int newDist = (nx - origin.first) * (nx - origin.first) + (ny - origin.second) * (ny - origin.second);
+            int newDist = abs(nx - origin.first) + abs(ny - origin.second);
             to_visit.push({newDist, nx, ny});
             visited.insert({nx, ny});
         }
