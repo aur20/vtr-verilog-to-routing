@@ -4,22 +4,22 @@ mkdir -p temp
 cd temp
 echo "Operating in directory: ${PWD}"
 
-VTR_ROOT=/path/to/vtr
-GNL_ROOT=/path/to/gnl
+VTR_ROOT=/workspace
+GNL_ROOT=/files/GNL-Generate-Netlist
 
 NET_DIR=nets
 VPR_DIR=vprs
 ARCH_PATH="${VTR_ROOT}/vtr_flow/arch/hes"
 ARCH_NAME=raveena.xml
 # Number of blocks to use in the benchmark
-L_NB=(50 100 500 1000) # 2000 5000 10000 15000 20000 40000 60000)
+L_NB=(50 100 200 400 500 750 1000 2000 5000 10000 15000 20000 40000 50000)
 # Distribution of blocks to use in the benchmark
 D_NB=(0.2 0.2 0.2 0.2 0.1 0.1) # 20% latches, 20% inv, 20% and2, 20% nand3, 10% or4, 10% xor2
 
 GNL_RUN=on
 VPR_RUN=on
 VPR_CONF="both" # "default" "markus"
-NRUN=3
+NRUN=5
 NPROC=12
 
 if [ "$GNL_RUN" == "on" ]; then
@@ -72,28 +72,24 @@ EOL
     cd ..
 fi
 
+enumerate_folders() {
+    prefix="$1"  # Prefix for folders (e.g., original, new)
+    description="$2"  # Additional text in folder names
+    dir="$3"  # Target directory
+
+    # Find the highest index for folders matching the prefix and description
+    max_index=$(find "$dir" -mindepth 1 -maxdepth 1 -type d -name "${prefix}_${description}_*" \
+        | sed -E "s|.*/${prefix}_${description}_||" \
+        | grep -E '^[0-9]+$' \
+        | sort -n \
+        | tail -n 1)
+
+    # Default to 0 if no matching folders are found
+    max_index=${max_index:-0}
+    echo $((max_index + 1))
+}
+
 if [ "$VPR_RUN" == "on" ]; then
-    if [ ! -d "$VTR_ROOT" ]; then
-        echo "VTR path does not exist"
-        exit 1
-    fi
-
-    enumerate_folders() {
-        prefix="$1"  # Pass prefix as an argument
-        dir="$2"     # Directory to search in
-
-        # Find the highest index for folders matching the prefix
-        max_index=$(find "$dir" -mindepth 1 -maxdepth 1 -type d -name "${prefix}_*" \
-            | sed -E "s|.*/${prefix}_||" \
-            | grep -E '^[0-9]+$' \
-            | sort -n \
-            | tail -n 1)
-
-        # Default to 0 if no matching folders are found
-        max_index=${max_index:-0}
-        echo $((max_index + 1))
-    }
-
     if [ ! -d "$VTR_ROOT" ]; then
         echo "VTR path does not exist"
         exit 1
@@ -108,8 +104,9 @@ if [ "$VPR_RUN" == "on" ]; then
         mkdir -p $VPR_DIR
         for RUN in $(seq 0 $NRUN); do
             for NB in "${L_NB[@]}"; do
-                folder_index=$(enumerate_folders "original" "$VPR_DIR")
-                PATHNAME="${VPR_DIR}/original_${NB}_${ARCH_NAME%.*}_${folder_index}"
+                description="${NB}_${ARCH_NAME%.*}"  # Customize this as needed
+                folder_index=$(enumerate_folders "original" "$description" "$VPR_DIR")
+                PATHNAME="${VPR_DIR}/original_${description}_${folder_index}"
                 mkdir -p "$PATHNAME"
                 cd "$PATHNAME"
                 echo "Running VPR for NB=$NB"
@@ -128,8 +125,9 @@ if [ "$VPR_RUN" == "on" ]; then
         mkdir -p $VPR_DIR
         for RUN in $(seq 0 $NRUN); do
             for NB in "${L_NB[@]}"; do
-                folder_index=$(enumerate_folders "new" "$VPR_DIR")
-                PATHNAME="${VPR_DIR}/new_${NB}_${ARCH_NAME%.*}_${folder_index}"
+                description="${NB}_${ARCH_NAME%.*}"  # Customize this as needed
+                folder_index=$(enumerate_folders "new" "$description" "$VPR_DIR")
+                PATHNAME="${VPR_DIR}/new_${description}_${folder_index}"
                 mkdir -p "$PATHNAME"
                 cd "$PATHNAME"
                 echo "Running VPR for NB=$NB"
