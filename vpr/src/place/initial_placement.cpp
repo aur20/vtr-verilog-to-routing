@@ -669,6 +669,7 @@ static bool try_stroobandt_placement(const t_pl_macro& pl_macro,
         //after placing the current block, its connections' score must be updated.
         for (ClusterBlockId blk_id : unplaced_blocks_to_update_their_score) {
             block_scores[blk_id].number_of_placed_connections++;
+            block_scores[blk_id].neighbour_placed = 1;
         }
     }
     return legal;
@@ -732,6 +733,9 @@ static bool try_centroid_placement(const t_pl_macro& pl_macro,
         //after placing the current block, its connections' score must be updated.
         for (ClusterBlockId blk_id : unplaced_blocks_to_update_their_score) {
             block_scores[blk_id].number_of_placed_connections++;
+        #if MARKUS_AT_WORK == 1
+            block_scores[blk_id].neighbour_placed = 1;
+        #endif
         }
     }
     return legal;
@@ -1176,6 +1180,9 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
     //initialize number of placed connections to zero for all blocks
     for (auto blk_id : cluster_ctx.clb_nlist.blocks()) {
         block_scores[blk_id].number_of_placed_connections = 0;
+    #if MARKUS_AT_WORK == 1
+        block_scores[blk_id].neighbour_placed = 0;
+    #endif
         if (is_cluster_constrained(blk_id)) {
             const PartitionRegion& pr = floorplan_ctx.cluster_constraints[blk_id];
             auto block_type = cluster_ctx.clb_nlist.block_type(blk_id);
@@ -1315,8 +1322,8 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         int rhs_score = block_scores[rhs].macro_size + block_scores[rhs].number_of_placed_connections + SORT_WEIGHT_PER_TILES_OUTSIDE_OF_PR * block_scores[rhs].tiles_outside_of_floorplan_constraints + SORT_WEIGHT_PER_FAILED_BLOCK * block_scores[rhs].failed_to_place_in_prev_attempts;
 
     #if MARKUS_AT_WORK == 1
-        if (block_scores[lhs].number_of_placed_connections != block_scores[rhs].number_of_placed_connections) // prefer nodes which are relative to placed nodes
-            return block_scores[lhs].number_of_placed_connections < block_scores[rhs].number_of_placed_connections;
+        if (block_scores[lhs].neighbour_placed != block_scores[rhs].neighbour_placed) // prefer nodes which are relative to placed nodes
+            return block_scores[lhs].neighbour_placed < block_scores[rhs].neighbour_placed;
         if (block_scores[lhs].longest_path != block_scores[rhs].longest_path) // by Pathlength
             return block_scores[lhs].longest_path < block_scores[rhs].longest_path;
         if (block_scores[lhs].parents.size() + block_scores[lhs].children.size() != block_scores[rhs].parents.size() + block_scores[rhs].children.size()) // by Connectivity
@@ -1349,17 +1356,16 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
 
         number_of_unplaced_blks_in_curr_itr = 0;
 
+        std::vector<ClusterBlockId> place_order;
+    #if MARKUS_AT_WORK != 1 // supress compiler warning
         //calculate heap update frequency based on number of blocks in the design
         int update_heap_freq = std::max((int)(blocks.size() / 100), 1);
 
         int blocks_placed_since_heap_update = 0;
+    #endif
 
         std::vector<ClusterBlockId> heap_blocks(blocks.begin(), blocks.end());
         std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
-        #if MARKUS_AT_WORK == 1
-            std::vector<ClusterBlockId> first_blocks;
-            int pathlength = 1;
-        #endif
 
         while (!heap_blocks.empty()) {
             std::pop_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
@@ -1373,21 +1379,21 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
             }
 
             VTR_LOGV_DEBUG(g_vpr_ctx.placement().f_placer_debug, "Popped Block %d\n", size_t(blk_id));
+
         #if MARKUS_AT_WORK == 1
-            if (first_blocks.size() < pathlength) {
-                first_blocks.push_back(blk_id);
-                pathlength = block_scores[blk_id].longest_path;
-            }
+            place_order.push_back(blk_id);
+        #else
+            blocks_placed_since_heap_update++;
         #endif
 
-            blocks_placed_since_heap_update++;
 
             bool block_placed = place_one_block(blk_id, pad_loc_type, &blk_types_empty_locs_in_grid[blk_id_type->index], &block_scores, blk_loc_registry, rng);
 
-            //update heap based on update_heap_freq calculated above
         #if MARKUS_AT_WORK == 1
+            // always update heap
             std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
         #else
+            //update heap based on update_heap_freq calculated above
             if (blocks_placed_since_heap_update % (update_heap_freq) == 0) {
                 std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
                 blocks_placed_since_heap_update = 0;
@@ -1409,13 +1415,10 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         //current iteration could place all of design's blocks, initial placement succeed
         if (number_of_unplaced_blks_in_curr_itr == 0) {
             VTR_LOG("Initial placement iteration %d has finished successfully\n", iter_no);
-        #if MARKUS_AT_WORK == 1
-            VTR_LOG("First blocks placed were: ");
-            for (const auto& blk_id : first_blocks) {
-                VTR_LOG("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
-            }
-            VTR_LOG("\n");
-        #endif
+            VTR_LOG_MARKUS("First blocks placed were: ");
+            for (const auto& blk_id : place_order) 
+                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+            VTR_LOG_MARKUS("\n");
             return;
         }
 

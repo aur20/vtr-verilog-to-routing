@@ -57,6 +57,7 @@ struct t_block_score {
     std::set<ClusterBlockId> children;
     std::set<ClusterBlockId> longpathparents;
     int longest_path;
+    int neighbour_placed;
 #endif
 };
 
