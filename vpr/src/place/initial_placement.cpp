@@ -1244,9 +1244,9 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
     VTR_LOG_MARKUS("Found [%d] red nodes and [%d] black nodes.\n", reds.size(), blacks.size());
 
     std::function<void(const ClusterBlockId& blk_id, int pathlength)> followToRed = [&](const ClusterBlockId& blk_id, int pathlength) {
-        for (const auto pin : cluster_ctx.clb_nlist.block_pins(blk_id)) {
+        for (const auto& pin : cluster_ctx.clb_nlist.block_pins(blk_id)) {
             if (cluster_ctx.clb_nlist.pin_type(pin) == PinType::DRIVER) {
-                const auto net_id = cluster_ctx.clb_nlist.pin_net(pin);
+                const auto& net_id = cluster_ctx.clb_nlist.pin_net(pin);
                 const auto& driver = cluster_ctx.clb_nlist.net_driver_block(net_id);
                 if (blk_id == driver) {
                     for (const auto& sink : cluster_ctx.clb_nlist.net_sinks(net_id)) {
