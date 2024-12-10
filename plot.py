@@ -33,7 +33,7 @@ class logInfo():
     slacktime_initial_place: float
     slacktime_total: float
 
-    cpd_history: list[float] | None
+    cpd_history: list[(float, float)]
 
     def strFromEntry(self, entry):
         if entry == "time_initial_place":
@@ -74,6 +74,8 @@ class logInfo():
 
                 if "Initial placement estimated Critical Path Delay" in line:
                     self.cpd_initial_place = float(s[s.index("(CPD):") + 1])
+                if "Placement estimated geomean non-virtual intra-domain" in line:
+                    self.cpd_total = float(s[s.index("period:") + 1])
                 if "Final critical path delay" in line:
                     self.cpd_total = float(s[s.index("slack):") + 1])
 
@@ -95,7 +97,7 @@ class logInfo():
                     continue
                 if "Tnum   Time       T Av Cost Av BB Cost Av TD Cost     CPD       sTNS     sWNS Ac Rate Std Dev  R lim Crit Exp Tot Moves  Alpha" in line:
                     start += 1
-                    self.cpd_history = [self.cpd_initial_place]
+                    self.cpd_history = [(self.time_initial_place, self.cpd_initial_place)]
                     continue
                 elif start == -1 or start == 0:
                     start += 1
@@ -108,13 +110,13 @@ class logInfo():
                             nonimportants += 1
                             continue
                         start += 1
-                        self.cpd_history.append(float(s[6]))
+                        self.cpd_history.append( (self.cpd_history[-1][0] + float(s[1]), float(s[6])) )
                     except:
                         nonimportants += 1
                         continue
-        self.cpd_history.append(self.cpd_total)
+        self.cpd_history.append((self.time_total, self.cpd_total))
 
-files = find_and_order_files("./vprs", "vpr_output.log")
+files = find_and_order_files("vprs/", "vpr_stdout.log")
 
 # Reading
 readings = {}
@@ -129,15 +131,18 @@ for file in files:
 
 # Averaging
 averages = {}
+averages2 = {} # Complete list of all values
 arch = files[0].split("/")[-2].split("_")[-2]
 blocksizes = []
 for cat, logs in readings.items():
     avg = logInfo(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    avg2 = logInfo([], [], [], [], [], [], [], [], [], [], [])
     blocksizes.append(int(cat.split("_")[1]))
     for log in logs:
         avg.time_initial_place += log.time_initial_place
         try:
             avg.time_stroobandt_init += log.time_stroobandt_init
+            avg2.time_stroobandt_init.append(log.time_stroobandt_init)
         except:
             pass
         avg.time_total += log.time_total
@@ -147,7 +152,17 @@ for cat, logs in readings.items():
         avg.wirelength_total += log.wirelength_total
         avg.slacktime_initial_place += log.slacktime_initial_place
         avg.slacktime_total += log.slacktime_total
-    print(f"Category: {cat} - {len(logs)} logs")
+        avg2.time_total.append(log.time_total)
+        avg2.time_initial_place.append(log.time_initial_place)
+        avg2.time_stroobandt_init.append(log.time_stroobandt_init)
+        avg2.time_quench.append(log.time_quench)
+        avg2.cpd_initial_place.append(log.cpd_initial_place)
+        avg2.cpd_total.append(log.cpd_total)
+        avg2.wirelength_initial_place.append(log.wirelength_initial_place)
+        avg2.wirelength_total.append(log.wirelength_total)
+        avg2.slacktime_initial_place.append(log.slacktime_initial_place)
+        avg2.slacktime_total.append(log.slacktime_total)
+    # print(f"Category: {cat} - {len(logs)} logs")
     avg.time_initial_place /= len(logs)
     avg.time_stroobandt_init /= len(logs)
     avg.time_total /= len(logs)
@@ -158,8 +173,11 @@ for cat, logs in readings.items():
     avg.slacktime_initial_place /= len(logs)
     avg.slacktime_total /= len(logs)
     averages[cat] = avg
+    averages2[cat] = avg2
 blocksizes = list(set(blocksizes))
 blocksizes.sort()
+blocksizes = [50, 100, 200, 400, 500, 750]
+gen = set([cat.split('_')[0] for cat in readings.keys()]) # Obtain 'original', 'stroobandt' from path
 
 # Plotting
 for x in logInfo(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0).__annotations__.keys():
@@ -172,20 +190,43 @@ for x in logInfo(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0).__annotations__.keys():
     plt.yscale("log")
     plt.xlabel("Blocksize")
     plt.ylabel(f"Time ({scale})")
-    plt.plot(blocksizes, [getattr(averages[f"original_{bs}_{arch}"], x) for bs in blocksizes], label="Original Method")
-    plt.plot(blocksizes, [getattr(averages[f"new_{bs}_{arch}"], x) for bs in blocksizes], label="Stroobandt Method")
+    for g in gen:
+        plt.plot(blocksizes, [abs(getattr(averages[f"{g}_{bs}_{arch}"], x)) for bs in blocksizes], label=g)
+        plt.boxplot([getattr(averages2[f"{g}_{bs}_{arch}"], x) for bs in blocksizes], positions=blocksizes, patch_artist=True, notch=True, showmeans=True, boxprops=dict(facecolor="skyblue"))
+
+    min_blocksize, max_blocksize = min(blocksizes), max(blocksizes)
+    decade_ticks = np.logspace(np.floor(np.log10(min_blocksize)), np.ceil(np.log10(max_blocksize)), num=int(np.ceil(np.log10(max_blocksize)) - np.floor(np.log10(min_blocksize))) + 1)
+    plt.xticks(decade_ticks, labels=[f"{int(tick):d}" for tick in decade_ticks])
     plt.legend()
     plt.grid()
     plt.savefig(f"{title}.png")
 
 plt.figure()
 plt.title("CPD History")
-plt.xlabel("Iteration")
+plt.xlabel("Time (s)")
 plt.ylabel("CPD (ns)")
-bs = 50000 # max(blocksizes)
-idx = 2
-plt.plot(range(0, len(readings[f"original_{bs}_{arch}"][idx].cpd_history)), readings[f"original_{bs}_{arch}"][idx].cpd_history, label="Original Method")
-plt.plot(range(0, len(readings[f"new_{bs}_{arch}"][idx].cpd_history)), readings[f"new_{bs}_{arch}"][idx].cpd_history, label="Stroobandt Method")
+bs = max(blocksizes)
+bs = 2000
+idx = 0
+for g in ["original", "stroobandt"]:
+    ne = len(readings[f"{g}_{bs}_{arch}"][0].cpd_history)
+    all_times = np.ndarray((len(readings[f"{g}_{bs}_{arch}"]), ne))
+    all_values = np.ndarray((len(readings[f"{g}_{bs}_{arch}"]), ne))
+    print(all_times.shape)
+    for j, reading in enumerate(readings[f"{g}_{bs}_{arch}"]):
+        print(len(reading.cpd_history))
+        for i in range(ne):
+            # all_times[j][i] = reading.cpd_history[i][0]
+            all_values[j][i] = reading.cpd_history[i][1]
+    avg_times = np.mean(all_times, axis=0)
+    avg_values = np.mean(all_values, axis=0)
+    print(len(avg_times))
+    print(len(avg_values))
+
+    plt.plot([t for t, v in readings[f"{g}_{bs}_{arch}"][0].cpd_history], avg_values, label=g)
+    # times = [t for t, v in readings[f"{g}_{bs}_{arch}"][idx].cpd_history]
+    # values = [v for t, v in readings[f"{g}_{bs}_{arch}"][idx].cpd_history]
+    # plt.plot(times, values, label=g)
 plt.legend()
 plt.grid()
 plt.savefig("CPD History.png")

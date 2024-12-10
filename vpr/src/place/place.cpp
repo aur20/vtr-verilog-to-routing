@@ -386,6 +386,19 @@ void try_place(const Netlist<>& net_list,
         print_histogram(create_setup_slack_histogram(*timing_info->setup_analyzer()));
     }
 
+    {
+        VprTimingGraphResolver resolver(atom_ctx.nlist, atom_ctx.lookup, *timing_ctx.graph,
+                                        *placement_delay_calc, is_flat, blk_loc_registry);
+        resolver.set_detail_level(analysis_opts.timing_report_detail);
+
+        tatum::TimingReporter timing_reporter(resolver, *timing_ctx.graph,
+                                            *timing_ctx.constraints);
+
+        timing_reporter.report_timing_setup(
+            "markus_timing_report.rpt",
+            *timing_info->setup_analyzer(), analysis_opts.timing_report_npaths);
+    }
+
     size_t num_macro_members = 0;
     for (auto& macro : blk_loc_registry.place_macros().macros()) {
         num_macro_members += macro.members.size();
@@ -856,7 +869,7 @@ static void print_place_status(const t_annealing_state& state,
                                bool noc_enabled,
                                const NocCostTerms& noc_cost_terms) {
     VTR_LOG(
-        "%4zu %6.1f %7.1e "
+        "%4zu %6.3f %7.1e "
         "%7.3f %10.2f %-10.5g "
         "%7.3f % 10.3g % 8.3f "
         "%7.3f %7.4f %6.1f %8.2f",

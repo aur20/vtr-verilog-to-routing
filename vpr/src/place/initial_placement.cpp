@@ -24,9 +24,6 @@
 void print_clb_placement(const char* fname);
 #endif
 
-#define MARKUS_STRICTLY_FOLLOW_PATHS
-// #define MARKUS_PERFORMING
-
 // Number of iterations that initial placement tries to place all blocks before throwing an error
 static constexpr int MAX_INIT_PLACE_ATTEMPTS = 2;
 
@@ -1257,17 +1254,7 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
     }
     VTR_LOG_MARKUS("Found [%d] red nodes and [%d] black nodes.\n", reds.size(), blacks.size());
 
-    auto insert_sorted = [](std::vector<std::list<ClusterBlockId>>& vec, const std::list<ClusterBlockId>& new_vec) {
-        auto it = std::lower_bound(vec.begin(), vec.end(), new_vec,
-                                   [](const std::list<ClusterBlockId>& a, const std::list<ClusterBlockId>& b) {
-                                       return a.size() > b.size();
-                                   });
-        vec.insert(it, new_vec);
-    };
-    std::vector<std::list<ClusterBlockId>> paths;
-    std::list<ClusterBlockId> parent_path;
     std::function<void(const ClusterBlockId&, int)> followToRed = [&](const ClusterBlockId& blk_id, int pathlength) {
-        parent_path.push_back(blk_id);
         for (const auto& pin : cluster_ctx.clb_nlist.block_pins(blk_id)) {
             if (cluster_ctx.clb_nlist.pin_type(pin) == PinType::DRIVER) {
                 const auto& net_id = cluster_ctx.clb_nlist.pin_net(pin);
@@ -1278,46 +1265,24 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
                         // Forward calculation
                         block_scores[blk_id].children.insert(child);
                         block_scores[child].parents.insert(blk_id);
-                    #ifdef MARKUS_PERFORMING // Only follow if new longest path
                         if (pathlength > block_scores[child].longest_path) {
                             block_scores[child].longest_path = pathlength;
                             block_scores[child].longpathparents.clear();
                             block_scores[child].longpathparents.insert(blk_id);
                             // Abort if red node
                             if (std::find(reds.begin(), reds.end(), child) != reds.end()) {
-                                std::list<ClusterBlockId> path(parent_path);
-                                path.push_back(child);
-                                insert_sorted(paths, path);
                                 VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(child).c_str());
                             }
-                            else
+                            else {
                                 followToRed(child, pathlength + 1);
+                            }
                         } else if (pathlength == block_scores[child].longest_path) {
                             block_scores[child].longpathparents.insert(blk_id);
                         }
-                    #else // Follow any path the same length as the longest path
-                        if (pathlength > block_scores[child].longest_path) {
-                            block_scores[child].longpathparents.clear();
-                        }
-                        if (pathlength >= block_scores[child].longest_path) {
-                            block_scores[child].longest_path = pathlength;
-                            block_scores[child].longpathparents.insert(blk_id);
-                            // Abort if red node
-                            if (std::find(reds.begin(), reds.end(), child) != reds.end()) {
-                                std::list<ClusterBlockId> path(parent_path);
-                                path.push_back(child);
-                                insert_sorted(paths, path);
-                                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(child).c_str());
-                            }
-                            else
-                                followToRed(child, pathlength + 1);
-                        }
-                    #endif
                     }
                 }
             }
         }
-        parent_path.pop_back();
     };
 
     for (const auto& blk_id : reds) {
@@ -1326,16 +1291,42 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
         VTR_LOG_MARKUS("\n");
     }
 
+    auto insert_sorted = [](std::vector<std::list<ClusterBlockId>>& vec, const std::list<ClusterBlockId>& new_vec) {
+        auto it = std::lower_bound(vec.begin(), vec.end(), new_vec,
+                                   [](const std::list<ClusterBlockId>& a, const std::list<ClusterBlockId>& b) {
+                                       return a.size() > b.size();
+                                   });
+        vec.insert(it, new_vec);
+    };
+    std::vector<std::list<ClusterBlockId>> paths;
+    std::list<ClusterBlockId> parent_path;
     std::function<void(const ClusterBlockId& blk_id)> followLongestBackwards =[&](const ClusterBlockId& blk_id) {
+        parent_path.push_back(blk_id);
         for (const ClusterBlockId& parent : block_scores[blk_id].longpathparents) {
-            if (std::find(reds.begin(), reds.end(), parent) != reds.end())
+            if (std::find(reds.begin(), reds.end(), parent) != reds.end()) {
+                std::list<ClusterBlockId> path(parent_path);
+                path.push_back(parent);
+                path.reverse();
+                insert_sorted(paths, path);
                 continue;
+            }
+        #ifdef MARKUS_PERFORMING
             if (block_scores[parent].longest_path < block_scores[blk_id].longest_path) {
                 VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(parent).c_str());
                 block_scores[parent].longest_path = block_scores[blk_id].longest_path; // std::max(block_scores[blk_id].longest_path, block_scores[parent].longest_path);
                 followLongestBackwards(parent);
             }
+        #else // Follow long paths so we get more statistics
+            if (block_scores[parent].longest_path < block_scores[blk_id].longest_path) {
+                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(parent).c_str());
+                block_scores[parent].longest_path = block_scores[blk_id].longest_path; // std::max(block_scores[blk_id].longest_path, block_scores[parent].longest_path);
+            }
+            if (block_scores[parent].longest_path >= block_scores[blk_id].longest_path - 3) {
+                followLongestBackwards(parent);
+            }
+        #endif
         }
+        parent_path.pop_back();
     };
 
     for (const auto& blk_id : reds) {
@@ -1345,19 +1336,20 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
     }
 
     size_t maxpath = 0;
-    VTR_LOG_MARKUS("Total number of paths found %d, longest paths follow:\n", paths.size());
+    VTR_LOG_MARKUS("Total number of paths found %d, longest paths have a length of %d:\n", paths.size(), paths[0].size());
     for (const auto& path : paths) {
         if (path.size() >= maxpath) {
             maxpath = path.size();
         } else {
             break;
         }
-        VTR_LOG_MARKUS("With a length of %d: ", path.size());
         for (const auto& blk_id : path) {
             VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
         }
         VTR_LOG_MARKUS("\n");
     }
+    paths.resize(std::min(600, (int) paths.size()));
+
     return std::make_tuple(block_scores, paths);
 #else
     return block_scores;
@@ -1425,20 +1417,17 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         std::vector<ClusterBlockId> placed_log;
     #if MARKUS_AT_WORK == 1
         std::vector<std::list<ClusterBlockId>> known_paths = paths;
-        size_t idx_path = known_paths.size();
         std::ofstream file;
         file.open("paths.txt");
-        int path_idx = 0;
+        std::vector<int> file_written(known_paths.size(), 0);
+    #ifdef MARKUS_STRICTLY_FOLLOW_PATHS
+        size_t idx_path = paths.size();
+    #endif
     #else  // supress compiler warning
         //calculate heap update frequency based on number of blocks in the design
         int update_heap_freq = std::max((int)(blocks.size() / 100), 1);
 
         int blocks_placed_since_heap_update = 0;
-    #endif
-
-    #ifdef MARKUS_STRICTLY_FOLLOW_PATHS
-        size_t path_length = 0;
-        std::vector<std::list<ClusterBlockId>>::iterator current_path;
     #endif
 
         std::vector<ClusterBlockId> heap_blocks(blocks.begin(), blocks.end());
@@ -1464,44 +1453,42 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
                 placed_log.push_back(blk_id);
                 VTR_LOG_MARKUS("Block #%d placed\n", placed_log.size());
             #ifdef MARKUS_STRICTLY_FOLLOW_PATHS
-                if (path_length == 0) {
+                VTR_LOG_MARKUS("idx %d: %d\n", idx_path, known_paths[idx_path].size());
+                if (idx_path == known_paths.size()) {
+                    std::vector<std::list<ClusterBlockId>>::iterator current_path;
                     current_path = std::find_if(known_paths.begin(), known_paths.end(), [&](const std::list<ClusterBlockId>& p) {
                         return std::find(p.begin(), p.end(), blk_id) != p.end();
                     });
                     if (current_path != known_paths.end()) {
                         idx_path = std::distance(known_paths.begin(), current_path);
-                        path_length = 1;
-                        for (const auto& b : *current_path) {
+                        for (const auto& b : known_paths[idx_path]) {
                             block_scores[b].neighbour_placed |= 2;
                         }
-                    } else {
+                    }
+                }
+                if (idx_path < known_paths.size()) {
+                    known_paths[idx_path].remove(blk_id);
+                    if (known_paths[idx_path].size() == 0) {
+                        VTR_LOG_MARKUS("Path completed: ");
+                        for (const auto& b : paths[idx_path]) {
+                            // Write path to file
+                            VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(b).c_str());
+                            file << cluster_ctx.clb_nlist.block_name(b) << " ";
+                        }
+                        VTR_LOG_MARKUS("\n");
+                        file << "\n";
                         idx_path = known_paths.size();
                     }
                 }
-                if (current_path != known_paths.end()) {
-                    current_path->remove(blk_id);
-                }
-                if (idx_path < known_paths.size() && current_path->size() == 0) {
-                    path_length = 0;
-                    VTR_LOG_MARKUS("Path completed %d: ", path_idx++);
-                    for (const auto& b : paths[idx_path]) {
-                        VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(b).c_str());
-                        // Write paths to file
-                        file << cluster_ctx.clb_nlist.block_name(b) << " ";
-                    }
-                    VTR_LOG_MARKUS("\n");
-                    file << "\n";
-                }
             #endif
-            #ifndef MARKUS_PERFORMING
                 for (size_t idx = 0; idx < known_paths.size(); idx++) {
                     if (std::find(known_paths[idx].begin(), known_paths[idx].end(), blk_id) != known_paths[idx].end()) {
                         known_paths[idx].remove(blk_id);
                         if (known_paths[idx].size() == 0) {
-                            VTR_LOG_MARKUS("Path completed %d: ", path_idx++);
+                            VTR_LOG_MARKUS("Path completed: ");
                             for (const auto& b : paths[idx]) {
+                                // Write path to file
                                 VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(b).c_str());
-                                // Write paths to file
                                 file << cluster_ctx.clb_nlist.block_name(b) << " ";
                             }
                             VTR_LOG_MARKUS("\n");
@@ -1509,7 +1496,6 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
                         }
                     }
                 }
-            #endif
             }
             // always update heap
             std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
