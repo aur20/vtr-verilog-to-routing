@@ -68,7 +68,7 @@ static bool place_macro(int macros_max_num_tries,
  * A higher score indicates that the block is more difficult to place.
  */
 #if MARKUS_AT_WORK == 1
-static std::tuple<vtr::vector<ClusterBlockId, t_block_score>, std::vector<std::list<ClusterBlockId>>>  assign_block_scores(const PlaceMacros& place_macros);
+static std::tuple<vtr::vector<ClusterBlockId, t_block_score>, std::list<std::list<ClusterBlockId>>, std::set<ClusterBlockId>>  assign_block_scores(const PlaceMacros& place_macros);
 #else
 static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const PlaceMacros& place_macros);
 #endif
@@ -238,7 +238,8 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
                              const char* constraints_file,
                              BlkLocRegistry& blk_loc_registry,
                             #if MARKUS_AT_WORK == 1
-                             std::vector<std::list<ClusterBlockId>>& paths,
+                             const std::vector<std::list<ClusterBlockId>>& paths,
+                             const std::set<ClusterBlockId>& reds,
                             #endif
                              vtr::RngContainer& rng);
 
@@ -1165,7 +1166,7 @@ static bool place_macro(int macros_max_num_tries,
 }
 
 #if MARKUS_AT_WORK == 1
-static std::tuple<vtr::vector<ClusterBlockId, t_block_score>, std::vector<std::list<ClusterBlockId>>>  assign_block_scores(const PlaceMacros& place_macros) {
+static std::tuple<vtr::vector<ClusterBlockId, t_block_score>, std::list<std::list<ClusterBlockId>>, std::set<ClusterBlockId>>  assign_block_scores(const PlaceMacros& place_macros) {
 #else
 static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const PlaceMacros& place_macros) {
 #endif
@@ -1212,11 +1213,11 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
 
 #if MARKUS_AT_WORK == 1
     vtr::ScopedStartFinishTimer timer("Stroobandt-analysis of graph");
-    // Iterate through all blocks in the netlist to filter relevant information
-    std::list<ClusterBlockId> reds;
+    // Iterate through all blocks in the netlist to filter relevant clusters
+    std::set<ClusterBlockId> reds;
     std::string redname = "red";
     std::string ioname = "io";
-    std::list<ClusterBlockId> blacks;
+    std::set<ClusterBlockId> blacks;
     std::string blackname = "black";
 
     for (const auto& blk_id : cluster_ctx.clb_nlist.blocks()) {
@@ -1237,13 +1238,13 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
             modename.find(redname)       != std::string::npos ||
             !cluster_ctx.clb_nlist.block_is_combinational(blk_id) )
         {
-            reds.push_back(blk_id);
+            reds.insert(blk_id);
             VTR_LOG_MARKUS("(red)");
         }
         // else if (blackname.find(blk_type->name) != std::string::npos)
         else
         {
-            blacks.push_back(blk_id);
+            blacks.insert(blk_id);
             VTR_LOG_MARKUS("(black)");
         }
         VTR_LOG_MARKUS("\n");
@@ -1253,6 +1254,9 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
         //         "[Fix this error] I can only deal with clb_red, clb_black, and IOs but got: %s\n", blk_type->name);
     }
     VTR_LOG_MARKUS("Found [%d] red nodes and [%d] black nodes.\n", reds.size(), blacks.size());
+
+    std::list<std::list<ClusterBlockId>> paths;
+    std::list<ClusterBlockId> parent_path;
 
     std::function<void(const ClusterBlockId&, int)> followToRed = [&](const ClusterBlockId& blk_id, int pathlength) {
         for (const auto& pin : cluster_ctx.clb_nlist.block_pins(blk_id)) {
@@ -1265,10 +1269,10 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
                         // Forward calculation
                         block_scores[blk_id].children.insert(child);
                         block_scores[child].parents.insert(blk_id);
-                        if (pathlength > block_scores[child].longest_path) {
-                            block_scores[child].longest_path = pathlength;
-                            block_scores[child].longpathparents.clear();
-                            block_scores[child].longpathparents.insert(blk_id);
+                        if (pathlength > block_scores[child].path_length) {
+                            block_scores[child].path_length = pathlength;
+                            block_scores[child].critical_parents.clear();
+                            block_scores[child].critical_parents.insert(blk_id);
                             // Abort if red node
                             if (std::find(reds.begin(), reds.end(), child) != reds.end()) {
                                 VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(child).c_str());
@@ -1276,8 +1280,8 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
                             else {
                                 followToRed(child, pathlength + 1);
                             }
-                        } else if (pathlength == block_scores[child].longest_path) {
-                            block_scores[child].longpathparents.insert(blk_id);
+                        } else if (pathlength == block_scores[child].path_length) {
+                            block_scores[child].critical_parents.insert(blk_id);
                         }
                     }
                 }
@@ -1285,49 +1289,48 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
         }
     };
 
+    std::function<void(const ClusterBlockId& blk_id)> followLongestBackwards =[&](const ClusterBlockId& blk_id) {
+        parent_path.push_back(blk_id);
+        for (const ClusterBlockId& parent : block_scores[blk_id].critical_parents) {
+            if (std::find(reds.begin(), reds.end(), parent) != reds.end()) {
+                std::list<ClusterBlockId> path(parent_path);
+                path.push_back(parent);
+                path.reverse();
+                paths.push_back(path);
+                continue;
+            }
+
+            if (block_scores[parent].path_length < block_scores[blk_id].path_length) {
+                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(parent).c_str());
+                block_scores[parent].path_length = block_scores[blk_id].path_length; // std::max(block_scores[blk_id].longest_path, block_scores[parent].longest_path);
+                followLongestBackwards(parent);
+            }
+        }
+        parent_path.pop_back();
+    };
+
+#ifndef MARKUS_PERFORMING // Collect all paths, then clear block_scores
+    for (const auto& blk_id : reds) {
+        VTR_LOG_MARKUS("Going from red node %s to ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+        followToRed(blk_id, 1);
+        VTR_LOG_MARKUS("\n");
+
+        VTR_LOG_MARKUS("Backpropagation from red node %s to ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+        followLongestBackwards(blk_id);
+        VTR_LOG_MARKUS("\n");
+
+        for (const auto& blk_ids : cluster_ctx.clb_nlist.blocks()){
+            block_scores[blk_ids].path_length = 0;
+            block_scores[blk_ids].critical_parents.clear();
+        }
+    }
+#endif
+
     for (const auto& blk_id : reds) {
         VTR_LOG_MARKUS("Going from red node %s to ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
         followToRed(blk_id, 1);
         VTR_LOG_MARKUS("\n");
     }
-
-    auto insert_sorted = [](std::vector<std::list<ClusterBlockId>>& vec, const std::list<ClusterBlockId>& new_vec) {
-        auto it = std::lower_bound(vec.begin(), vec.end(), new_vec,
-                                   [](const std::list<ClusterBlockId>& a, const std::list<ClusterBlockId>& b) {
-                                       return a.size() > b.size();
-                                   });
-        vec.insert(it, new_vec);
-    };
-    std::vector<std::list<ClusterBlockId>> paths;
-    std::list<ClusterBlockId> parent_path;
-    std::function<void(const ClusterBlockId& blk_id)> followLongestBackwards =[&](const ClusterBlockId& blk_id) {
-        parent_path.push_back(blk_id);
-        for (const ClusterBlockId& parent : block_scores[blk_id].longpathparents) {
-            if (std::find(reds.begin(), reds.end(), parent) != reds.end()) {
-                std::list<ClusterBlockId> path(parent_path);
-                path.push_back(parent);
-                path.reverse();
-                insert_sorted(paths, path);
-                continue;
-            }
-        #ifdef MARKUS_PERFORMING
-            if (block_scores[parent].longest_path < block_scores[blk_id].longest_path) {
-                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(parent).c_str());
-                block_scores[parent].longest_path = block_scores[blk_id].longest_path; // std::max(block_scores[blk_id].longest_path, block_scores[parent].longest_path);
-                followLongestBackwards(parent);
-            }
-        #else // Follow long paths so we get more statistics
-            if (block_scores[parent].longest_path < block_scores[blk_id].longest_path) {
-                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(parent).c_str());
-                block_scores[parent].longest_path = block_scores[blk_id].longest_path; // std::max(block_scores[blk_id].longest_path, block_scores[parent].longest_path);
-            }
-            if (block_scores[parent].longest_path >= block_scores[blk_id].longest_path - 3) {
-                followLongestBackwards(parent);
-            }
-        #endif
-        }
-        parent_path.pop_back();
-    };
 
     for (const auto& blk_id : reds) {
         VTR_LOG_MARKUS("Backpropagation from red node %s to ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
@@ -1335,11 +1338,14 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
         VTR_LOG_MARKUS("\n");
     }
 
-    size_t maxpath = 0;
-    VTR_LOG_MARKUS("Total number of paths found %d, longest paths have a length of %d:\n", paths.size(), paths[0].size());
+    size_t keep_paths = 0;
+    paths.sort([](const std::list<ClusterBlockId>& lhs, const std::list<ClusterBlockId>& rhs) {
+        return lhs.size() > rhs.size();
+    });
+    VTR_LOG_MARKUS("Total number of paths found %d, longest paths have a length of %d:\n", paths.size(), paths.front().size());
     for (const auto& path : paths) {
-        if (path.size() >= maxpath) {
-            maxpath = path.size();
+        if (path.size() >= paths.front().size() - QUASI_CRITICALITY_D) {
+            keep_paths++;
         } else {
             break;
         }
@@ -1348,9 +1354,9 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
         }
         VTR_LOG_MARKUS("\n");
     }
-    paths.resize(std::min(600, (int) paths.size()));
+    paths.resize(keep_paths);
 
-    return std::make_tuple(block_scores, paths);
+    return std::make_tuple(block_scores, paths, reds);
 #else
     return block_scores;
 #endif
@@ -1362,7 +1368,8 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
                              const char* constraints_file,
                              BlkLocRegistry& blk_loc_registry,
                             #if MARKUS_AT_WORK == 1
-                             std::vector<std::list<ClusterBlockId>>& paths,
+                             const std::vector<std::list<ClusterBlockId>>& paths,
+                             const std::set<ClusterBlockId>& reds,
                             #endif
                              vtr::RngContainer& rng) {
     const auto& cluster_ctx = g_vpr_ctx.clustering();
@@ -1382,8 +1389,8 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
     #if MARKUS_AT_WORK == 1
         if (block_scores[lhs].neighbour_placed != block_scores[rhs].neighbour_placed) // prefer nodes which are relative to placed nodes
             return block_scores[lhs].neighbour_placed < block_scores[rhs].neighbour_placed;
-        if (block_scores[lhs].longest_path != block_scores[rhs].longest_path) // by Pathlength
-            return block_scores[lhs].longest_path < block_scores[rhs].longest_path;
+        if (block_scores[lhs].path_length != block_scores[rhs].path_length) // by Pathlength
+            return block_scores[lhs].path_length < block_scores[rhs].path_length;
         if (block_scores[lhs].parents.size() + block_scores[lhs].children.size() != block_scores[rhs].parents.size() + block_scores[rhs].children.size()) // by Connectivity
             return block_scores[lhs].parents.size() + block_scores[lhs].children.size() < block_scores[rhs].parents.size() + block_scores[rhs].children.size();
         if (block_scores[lhs].children.size() != block_scores[rhs].children.size()) // by Fanout
@@ -1432,6 +1439,46 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
 
         std::vector<ClusterBlockId> heap_blocks(blocks.begin(), blocks.end());
         std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
+
+    #if MARKUS_AT_PRINTER == 1
+    {
+        std::set<ClusterBlockId> relatives;
+        std::function<void(const ClusterBlockId&)> followParents = [&](const ClusterBlockId& blk_id) {
+            if (std::find(relatives.begin(), relatives.end(), blk_id) == relatives.end()) {
+                relatives.insert(blk_id);
+                if (std::find(reds.begin(), reds.end(), blk_id) == reds.end()) {
+                    for (const auto& parent : block_scores[blk_id].parents) {
+                        followParents(parent);
+                    }
+                }
+            }
+        };
+        followParents(heap_blocks[0]);
+        relatives.erase(heap_blocks[0]);
+        std::function<void(const ClusterBlockId&)> followChildren = [&](const ClusterBlockId& blk_id) {
+            if (std::find(relatives.begin(), relatives.end(), blk_id) == relatives.end()) {
+                relatives.insert(blk_id);
+                if (std::find(reds.begin(), reds.end(), blk_id) == reds.end()) {
+                    for (const auto& child : block_scores[blk_id].children) {
+                        followChildren(child);
+                    }
+                }
+            }
+        };
+        followChildren(heap_blocks[0]);
+        relatives.erase(heap_blocks[0]);
+
+        VTR_LOG_MARKUS("Total number of blocks: %d\n", heap_blocks.size());
+        VTR_LOG_MARKUS("Most central block is %s, it is on a path of %d hops and has a FanIN of %d and FanOUT of %d\n",
+                cluster_ctx.clb_nlist.block_name(heap_blocks[0]).c_str(), block_scores[heap_blocks[0]].path_length,
+                block_scores[heap_blocks[0]].parents.size(), block_scores[heap_blocks[0]].children.size(), block_scores[heap_blocks[0]].neighbour_placed);
+        VTR_LOG_MARKUS("In total %d blocks interact with this block\n", relatives.size());
+        for (const auto& blk_id : relatives) {
+            VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+        }
+        VTR_LOG_MARKUS("\n");
+    }
+    #endif
 
         while (!heap_blocks.empty()) {
             std::pop_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
@@ -1644,9 +1691,10 @@ void initial_placement(const t_placer_opts& placer_opts,
 
         //Assign scores to blocks and placement macros according to how difficult they are to place
     #if MARKUS_AT_WORK == 1
-        auto [block_scores, paths] = assign_block_scores(place_macros);
+        auto [block_scores, paths, reds] = assign_block_scores(place_macros);
         //Place all blocks
-        place_all_blocks(placer_opts, block_scores, placer_opts.pad_loc_type, constraints_file, blk_loc_registry, paths, rng);
+        std::vector<std::list<ClusterBlockId>> paths_copy(paths.begin(), paths.end());
+        place_all_blocks(placer_opts, block_scores, placer_opts.pad_loc_type, constraints_file, blk_loc_registry, paths_copy, reds, rng);
     #else
         vtr::vector<ClusterBlockId, t_block_score> block_scores = assign_block_scores(place_macros);
         //Place all blocks

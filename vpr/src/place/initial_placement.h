@@ -14,11 +14,17 @@ class NocCostHandler;
 #ifdef MARKUS_AT_WORK
     #if MARKUS_AT_WORK == 1
         #warning "Markus is meddling your codebase"
-        // #define MARKUS_STRICTLY_FOLLOW_PATHS
-        #define MARKUS_PERFORMING
+        #define MARKUS_STRICTLY_FOLLOW_PATHS
+        // #define MARKUS_PERFORMING
     #endif
 #else
     #define MARKUS_AT_WORK 0
+#endif
+
+#ifdef MARKUS_PERFORMING
+    #define QUASI_CRITICALITY_D 0
+#else
+    #define QUASI_CRITICALITY_D 2
 #endif
 
 #ifdef MARKUS_AT_PRINTER
@@ -57,8 +63,8 @@ struct t_block_score {
 #ifdef MARKUS_AT_WORK
     std::set<ClusterBlockId> parents;
     std::set<ClusterBlockId> children;
-    std::set<ClusterBlockId> longpathparents;
-    int longest_path;
+    std::set<ClusterBlockId> critical_parents;
+    int path_length;
     int neighbour_placed;
 #endif
 };
