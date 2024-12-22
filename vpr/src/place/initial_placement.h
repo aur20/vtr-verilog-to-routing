@@ -14,7 +14,7 @@ class NocCostHandler;
 #ifdef MARKUS_AT_WORK
     #if MARKUS_AT_WORK == 1
         #warning "Markus is meddling your codebase"
-        #define MARKUS_STRICTLY_FOLLOW_PATHS
+        // #define MARKUS_STRICTLY_FOLLOW_PATHS
         // #define MARKUS_PERFORMING
     #endif
 #else
@@ -35,6 +35,8 @@ class NocCostHandler;
 #else
     #define VTR_LOG_MARKUS(...) VTR_LOGV(0, __VA_ARGS__)
 #endif
+
+#define VTR_LOG_ADDONS(...) VTR_LOGV(MARKUS_AT_WORK, __VA_ARGS__)
 
 class BlkLocRegistry;
 
@@ -64,6 +66,7 @@ struct t_block_score {
     std::set<ClusterBlockId> parents;
     std::set<ClusterBlockId> children;
     std::set<ClusterBlockId> critical_parents;
+    bool is_red;
     int path_length;
     int neighbour_placed;
 #endif

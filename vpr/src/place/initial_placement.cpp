@@ -68,7 +68,7 @@ static bool place_macro(int macros_max_num_tries,
  * A higher score indicates that the block is more difficult to place.
  */
 #if MARKUS_AT_WORK == 1
-static std::tuple<vtr::vector<ClusterBlockId, t_block_score>, std::list<std::list<ClusterBlockId>>, std::set<ClusterBlockId>>  assign_block_scores(const PlaceMacros& place_macros);
+static std::tuple<vtr::vector<ClusterBlockId, t_block_score>, std::list<std::list<ClusterBlockId>>>  assign_block_scores(const PlaceMacros& place_macros);
 #else
 static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const PlaceMacros& place_macros);
 #endif
@@ -239,7 +239,6 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
                              BlkLocRegistry& blk_loc_registry,
                             #if MARKUS_AT_WORK == 1
                              const std::vector<std::list<ClusterBlockId>>& paths,
-                             const std::set<ClusterBlockId>& reds,
                             #endif
                              vtr::RngContainer& rng);
 
@@ -1166,7 +1165,7 @@ static bool place_macro(int macros_max_num_tries,
 }
 
 #if MARKUS_AT_WORK == 1
-static std::tuple<vtr::vector<ClusterBlockId, t_block_score>, std::list<std::list<ClusterBlockId>>, std::set<ClusterBlockId>>  assign_block_scores(const PlaceMacros& place_macros) {
+static std::tuple<vtr::vector<ClusterBlockId, t_block_score>, std::list<std::list<ClusterBlockId>>>  assign_block_scores(const PlaceMacros& place_macros) {
 #else
 static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const PlaceMacros& place_macros) {
 #endif
@@ -1194,6 +1193,7 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
         block_scores[blk_id].number_of_placed_connections = 0;
     #if MARKUS_AT_WORK == 1
         block_scores[blk_id].neighbour_placed = 0;
+        block_scores[blk_id].is_red = false;
     #endif
         if (is_cluster_constrained(blk_id)) {
             const PartitionRegion& pr = floorplan_ctx.cluster_constraints[blk_id];
@@ -1239,6 +1239,7 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
             !cluster_ctx.clb_nlist.block_is_combinational(blk_id) )
         {
             reds.insert(blk_id);
+            block_scores[blk_id].is_red = true;
             VTR_LOG_MARKUS("(red)");
         }
         // else if (blackname.find(blk_type->name) != std::string::npos)
@@ -1273,8 +1274,8 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
                             block_scores[child].path_length = pathlength;
                             block_scores[child].critical_parents.clear();
                             block_scores[child].critical_parents.insert(blk_id);
-                            // Abort if red node
-                            if (std::find(reds.begin(), reds.end(), child) != reds.end()) {
+                            // End of path at red node
+                            if (block_scores[child].is_red) {
                                 VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(child).c_str());
                             }
                             else {
@@ -1292,7 +1293,7 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
     std::function<void(const ClusterBlockId& blk_id)> followLongestBackwards =[&](const ClusterBlockId& blk_id) {
         parent_path.push_back(blk_id);
         for (const ClusterBlockId& parent : block_scores[blk_id].critical_parents) {
-            if (std::find(reds.begin(), reds.end(), parent) != reds.end()) {
+            if (block_scores[parent].is_red) {
                 std::list<ClusterBlockId> path(parent_path);
                 path.push_back(parent);
                 path.reverse();
@@ -1342,7 +1343,7 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
     paths.sort([](const std::list<ClusterBlockId>& lhs, const std::list<ClusterBlockId>& rhs) {
         return lhs.size() > rhs.size();
     });
-    VTR_LOG_MARKUS("Total number of paths found %d, longest paths have a length of %d:\n", paths.size(), paths.front().size());
+    VTR_LOG_ADDONS("Total number of paths found %d, longest paths have a length of %d:\n", paths.size(), paths.front().size());
     for (const auto& path : paths) {
         if (path.size() >= paths.front().size() - QUASI_CRITICALITY_D) {
             keep_paths++;
@@ -1350,13 +1351,14 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
             break;
         }
         for (const auto& blk_id : path) {
-            VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+            VTR_LOG_ADDONS("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
         }
-        VTR_LOG_MARKUS("\n");
+        VTR_LOG_ADDONS("\n");
     }
     paths.resize(keep_paths);
+    VTR_LOG_ADDONS("(Kepping %d paths for reference)\n", paths.size());
 
-    return std::make_tuple(block_scores, paths, reds);
+    return std::make_tuple(block_scores, paths);
 #else
     return block_scores;
 #endif
@@ -1369,7 +1371,6 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
                              BlkLocRegistry& blk_loc_registry,
                             #if MARKUS_AT_WORK == 1
                              const std::vector<std::list<ClusterBlockId>>& paths,
-                             const std::set<ClusterBlockId>& reds,
                             #endif
                              vtr::RngContainer& rng) {
     const auto& cluster_ctx = g_vpr_ctx.clustering();
@@ -1393,8 +1394,6 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
             return block_scores[lhs].path_length < block_scores[rhs].path_length;
         if (block_scores[lhs].parents.size() + block_scores[lhs].children.size() != block_scores[rhs].parents.size() + block_scores[rhs].children.size()) // by Connectivity
             return block_scores[lhs].parents.size() + block_scores[lhs].children.size() < block_scores[rhs].parents.size() + block_scores[rhs].children.size();
-        if (block_scores[lhs].children.size() != block_scores[rhs].children.size()) // by Fanout
-            return block_scores[lhs].children.size() < block_scores[rhs].children.size();
         if (block_scores[lhs].parents.size() != block_scores[rhs].parents.size()) // by Fanin
             return block_scores[lhs].parents.size() < block_scores[rhs].parents.size();
     #endif
@@ -1426,9 +1425,9 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         std::vector<std::list<ClusterBlockId>> known_paths = paths;
         std::ofstream file;
         file.open("paths.txt");
-        std::vector<int> file_written(known_paths.size(), 0);
+        int finished_paths = 0;
     #ifdef MARKUS_STRICTLY_FOLLOW_PATHS
-        size_t idx_path = paths.size();
+        std::vector<std::list<ClusterBlockId>>::iterator current_path = known_paths.begin();
     #endif
     #else  // supress compiler warning
         //calculate heap update frequency based on number of blocks in the design
@@ -1440,13 +1439,13 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         std::vector<ClusterBlockId> heap_blocks(blocks.begin(), blocks.end());
         std::make_heap(heap_blocks.begin(), heap_blocks.end(), criteria);
 
-    #if MARKUS_AT_PRINTER == 1
-    {
+    #if MARKUS_AT_WORK == 1
+    if (iter_no == 0) {
         std::set<ClusterBlockId> relatives;
         std::function<void(const ClusterBlockId&)> followParents = [&](const ClusterBlockId& blk_id) {
             if (std::find(relatives.begin(), relatives.end(), blk_id) == relatives.end()) {
                 relatives.insert(blk_id);
-                if (std::find(reds.begin(), reds.end(), blk_id) == reds.end()) {
+                if (!block_scores[blk_id].is_red) {
                     for (const auto& parent : block_scores[blk_id].parents) {
                         followParents(parent);
                     }
@@ -1458,7 +1457,7 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         std::function<void(const ClusterBlockId&)> followChildren = [&](const ClusterBlockId& blk_id) {
             if (std::find(relatives.begin(), relatives.end(), blk_id) == relatives.end()) {
                 relatives.insert(blk_id);
-                if (std::find(reds.begin(), reds.end(), blk_id) == reds.end()) {
+                if (!block_scores[blk_id].is_red) {
                     for (const auto& child : block_scores[blk_id].children) {
                         followChildren(child);
                     }
@@ -1468,15 +1467,11 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         followChildren(heap_blocks[0]);
         relatives.erase(heap_blocks[0]);
 
-        VTR_LOG_MARKUS("Total number of blocks: %d\n", heap_blocks.size());
-        VTR_LOG_MARKUS("Most central block is %s, it is on a path of %d hops and has a FanIN of %d and FanOUT of %d\n",
+        VTR_LOG_ADDONS("Total number of blocks: %d\n", heap_blocks.size());
+        VTR_LOG_ADDONS("Most central block is %s, it is on a path of %d hops and has a FanIN of %d and FanOUT of %d\n",
                 cluster_ctx.clb_nlist.block_name(heap_blocks[0]).c_str(), block_scores[heap_blocks[0]].path_length,
                 block_scores[heap_blocks[0]].parents.size(), block_scores[heap_blocks[0]].children.size(), block_scores[heap_blocks[0]].neighbour_placed);
-        VTR_LOG_MARKUS("In total %d blocks interact with this block\n", relatives.size());
-        for (const auto& blk_id : relatives) {
-            VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
-        }
-        VTR_LOG_MARKUS("\n");
+        VTR_LOG_ADDONS("In total %d blocks interact with this block\n", relatives.size());
     }
     #endif
 
@@ -1498,49 +1493,34 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         #if MARKUS_AT_WORK == 1
             if (block_placed) {
                 placed_log.push_back(blk_id);
-                VTR_LOG_MARKUS("Block #%d placed\n", placed_log.size());
-            #ifdef MARKUS_STRICTLY_FOLLOW_PATHS
-                VTR_LOG_MARKUS("idx %d: %d\n", idx_path, known_paths[idx_path].size());
-                if (idx_path == known_paths.size()) {
-                    std::vector<std::list<ClusterBlockId>>::iterator current_path;
-                    current_path = std::find_if(known_paths.begin(), known_paths.end(), [&](const std::list<ClusterBlockId>& p) {
-                        return std::find(p.begin(), p.end(), blk_id) != p.end();
-                    });
-                    if (current_path != known_paths.end()) {
-                        idx_path = std::distance(known_paths.begin(), current_path);
-                        for (const auto& b : known_paths[idx_path]) {
-                            block_scores[b].neighbour_placed |= 2;
-                        }
-                    }
-                }
-                if (idx_path < known_paths.size()) {
-                    known_paths[idx_path].remove(blk_id);
-                    if (known_paths[idx_path].size() == 0) {
-                        VTR_LOG_MARKUS("Path completed: ");
-                        for (const auto& b : paths[idx_path]) {
-                            // Write path to file
-                            VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(b).c_str());
-                            file << cluster_ctx.clb_nlist.block_name(b) << " ";
-                        }
-                        VTR_LOG_MARKUS("\n");
-                        file << "\n";
-                        idx_path = known_paths.size();
-                    }
-                }
-            #endif
+                VTR_LOG_ADDONS("Block #%d placed: %s\n", placed_log.size(), cluster_ctx.clb_nlist.block_name(blk_id).c_str());
                 for (size_t idx = 0; idx < known_paths.size(); idx++) {
                     if (std::find(known_paths[idx].begin(), known_paths[idx].end(), blk_id) != known_paths[idx].end()) {
                         known_paths[idx].remove(blk_id);
                         if (known_paths[idx].size() == 0) {
-                            VTR_LOG_MARKUS("Path completed: ");
+                            VTR_LOG_ADDONS("Block #%d completed the %d. path of length %d", placed_log.size(), ++finished_paths, paths[idx].size());
+                            VTR_LOG_MARKUS(": ");
                             for (const auto& b : paths[idx]) {
                                 // Write path to file
                                 VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(b).c_str());
                                 file << cluster_ctx.clb_nlist.block_name(b) << " ";
                             }
-                            VTR_LOG_MARKUS("\n");
+                            VTR_LOG_ADDONS("\n");
                             file << "\n";
                         }
+                    #ifdef MARKUS_STRICTLY_FOLLOW_PATHS
+                        if (known_paths[idx] == current_path) {
+                            current_path = std::find_if(known_paths.begin(), known_paths.end(), [&](const std::list<ClusterBlockId>& p) {
+                                return std::find(p.begin(), p.end(), blk_id) != p.end();
+                            });
+                            if (current_path != known_paths.end()) {
+                                idx_path = std::distance(known_paths.begin(), current_path);
+                                for (const auto& b : known_paths[idx_path]) {
+                                    block_scores[b].neighbour_placed |= 2;
+                                }
+                            }
+                        }
+                    #endif
                     }
                 }
             }
@@ -1570,10 +1550,10 @@ static void place_all_blocks(const t_placer_opts& placer_opts,
         //current iteration could place all of design's blocks, initial placement succeed
         if (number_of_unplaced_blks_in_curr_itr == 0) {
             VTR_LOG("Initial placement iteration %d has finished successfully\n", iter_no);
-            VTR_LOG_MARKUS("First blocks placed were: ");
-            for (const auto& blk_id : placed_log) 
-                VTR_LOG_MARKUS("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
-            VTR_LOG_MARKUS("\n");
+            VTR_LOG_ADDONS("Order of block placement was: ");
+            for (const auto& blk_id : placed_log)
+                VTR_LOG_ADDONS("%s ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
+            VTR_LOG_ADDONS("\n");
             return;
         }
 
@@ -1691,10 +1671,10 @@ void initial_placement(const t_placer_opts& placer_opts,
 
         //Assign scores to blocks and placement macros according to how difficult they are to place
     #if MARKUS_AT_WORK == 1
-        auto [block_scores, paths, reds] = assign_block_scores(place_macros);
+        auto [block_scores, paths] = assign_block_scores(place_macros);
         //Place all blocks
         std::vector<std::list<ClusterBlockId>> paths_copy(paths.begin(), paths.end());
-        place_all_blocks(placer_opts, block_scores, placer_opts.pad_loc_type, constraints_file, blk_loc_registry, paths_copy, reds, rng);
+        place_all_blocks(placer_opts, block_scores, placer_opts.pad_loc_type, constraints_file, blk_loc_registry, paths_copy, rng);
     #else
         vtr::vector<ClusterBlockId, t_block_score> block_scores = assign_block_scores(place_macros);
         //Place all blocks
