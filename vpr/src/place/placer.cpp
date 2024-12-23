@@ -14,8 +14,11 @@
 #include "annealer.h"
 #include "RL_agent_util.h"
 #include "place_checkpoint.h"
+#include "cluster_util.h"
 #include "tatum/echo_writer.hpp"
 #include "tatum/TimingReporter.hpp"
+#include "VprTimingGraphResolver.h"
+
 
 Placer::Placer(const Netlist<>& net_list,
                const t_placer_opts& placer_opts,
@@ -138,20 +141,17 @@ Placer::Placer(const Netlist<>& net_list,
    check_place_();
 
    log_printer_.print_initial_placement_stats();
-//    {
-//         const auto& atom_ctx = g_vpr_ctx.atom();
-//         const auto& timing_ctx = g_vpr_ctx.timing();
-//         VprTimingGraphResolver resolver(atom_ctx.nlist, atom_ctx.lookup, *timing_ctx.graph, placement_delay_calc_, is_flat, blk_loc_registry);
-//         resolver.set_detail_level(analysis_opts.timing_report_detail);
+   {
+    auto& timing_ctx = g_vpr_ctx.timing();
+    auto& atom_ctx = g_vpr_ctx.atom();
 
-//         tatum::TimingReporter timing_reporter(resolver, timing_ctx.graph,
-//                                             timing_ctx.constraints);
+    VprTimingGraphResolver resolver(atom_ctx.nlist, atom_ctx.lookup, *timing_ctx.graph, *placement_delay_calc_, is_flat, blk_loc_registry);
+    resolver.set_detail_level(analysis_opts.timing_report_detail);
 
-//         timing_reporter.report_timing_setup(
-//             "markus_timing_report.rpt",
-//             *timing_info_->setup_analyzer(), analysis_opts.timing_report_npaths);
-//     }
-    #warning "Placer could report timings after initial placement"
+    tatum::TimingReporter timing_reporter(resolver, *timing_ctx.graph, *timing_ctx.constraints);
+
+    timing_reporter.report_timing_setup("markus_timing_report.rpt", *timing_info_.get()->setup_analyzer(), analysis_opts.timing_report_npaths);
+   }
 
    annealer_ = std::make_unique<PlacementAnnealer>(placer_opts_, placer_state_, costs_, net_cost_handler_, noc_cost_handler_,
                                                    noc_opts_, rng_, std::move(move_generator), std::move(move_generator2), place_delay_model_.get(),
@@ -284,7 +284,6 @@ int Placer::check_placement_costs_() {
 void Placer::place() {
    const auto& timing_ctx = g_vpr_ctx.timing();
    const auto& cluster_ctx = g_vpr_ctx.clustering();
-
 
    bool skip_anneal = false;
 #ifdef ENABLE_ANALYTIC_PLACE
