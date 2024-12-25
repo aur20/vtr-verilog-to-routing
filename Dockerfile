@@ -4,7 +4,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV WORKSPACE=/workspace
 RUN mkdir -p ${WORKSPACE}
 WORKDIR ${WORKSPACE}
-COPY . ${WORKSPACE}
+COPY install_apt_packages.sh requirements.txt ${WORKSPACE}
 # Install and cleanup is done in one command to minimize the build cache size
 RUN apt-get update -qq \
 # Extract package names from install_apt_packages.sh
@@ -26,6 +26,6 @@ RUN apt-get update -qq \
     && apt-get autoclean && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
 # Build VTR
-RUN rm -rf build && make -j$(nproc) && make install
+# RUN rm -rf build && make -j$(nproc) && make install
 # Container's default launch command
 SHELL ["/bin/bash", "-c"]
