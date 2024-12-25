@@ -4,23 +4,23 @@ mkdir -p temp
 cd temp
 echo "Operating in directory: ${PWD}"
 
-VTR_ROOT=/path/to/vtr
-GNL_ROOT=/path/to/GNL-Generate-Netlist
+VTR_ROOT=/workspace
+GNL_ROOT=/files/GNL-Generate-Netlist
 
 NET_DIR=nets
 VPR_DIR=vprs
 ARCH_PATH="${VTR_ROOT}/vtr_flow/arch/hes"
-ARCH_NAME=raveena.xml
+ARCH_NAME=markus.xml
 # Number of blocks to use in the benchmark
-L_NB=(50 100 200 400 500)
+L_NB=(10 20 30 40 50 100 200 400 500 750 1000 2000 5000 10000 15000 20000 40000 50000)
 # Distribution of blocks to use in the benchmark
 D_NB=(0.2 0.2 0.2 0.2 0.1 0.1) # 20% latches, 20% inv, 20% and2, 20% nand3, 10% or4, 10% xor2
 
-GNL_RUN=off
+GNL_RUN=on
 VPR_RUN=on
-VPR_CONF="markus" #"both" # "default" "markus"
-NRUN=3
-NPROC=12
+VPR_CONF="both" # "stroobandt" "default"
+NRUN=9
+NPROC=$(nproc)
 
 if [ "$GNL_RUN" == "on" ]; then
     if [ ! -d "$GNL_ROOT" ]; then
@@ -110,7 +110,7 @@ if [ "$VPR_RUN" == "on" ]; then
                 mkdir -p "$PATHNAME"
                 cd "$PATHNAME"
                 echo "Running VPR for NB=$NB"
-                $VTR_ROOT/vpr/vpr $ARCH_PATH/$ARCH_NAME ../../$NET_DIR/${NB}.blif --route_chan_width 20 --inner_loop_recompute_divider 1 --save_graphics on --graphics_commands "set_cpd 1; save_graphics cpd1.png;" --seed $NB$RUN --write_timing_summary timing_summary.json -j$NPROC --pack --place --write_initial_place_file initial.place --post_place_timing_report timing_post_place.rpt > "vpr_output.log" 2>&1
+                $VTR_ROOT/vpr/vpr $ARCH_PATH/$ARCH_NAME ../../$NET_DIR/${NB}.blif --route_chan_width 20 --inner_loop_recompute_divider 1 --save_graphics on --graphics_commands "set_cpd 1; save_graphics cpd1.png;" --seed $NB$RUN --write_timing_summary timing_summary.json -j$NPROC --exit_t 0.05 --write_initial_place_file initial.place --post_place_timing_report timing_post_place.rpt > /dev/null 2> "vpr_errors.log"
                 cd "$pw"
             done
         done
@@ -131,7 +131,7 @@ if [ "$VPR_RUN" == "on" ]; then
                 mkdir -p "$PATHNAME"
                 cd "$PATHNAME"
                 echo "Running VPR for NB=$NB"
-                $VTR_ROOT/vpr/vpr $ARCH_PATH/$ARCH_NAME ../../$NET_DIR/${NB}.blif --route_chan_width 20 --inner_loop_recompute_divider 1 --save_graphics on --graphics_commands "set_cpd 1; save_graphics cpd1.png;" --seed $NB$RUN --write_timing_summary timing_summary.json -j$NPROC --pack --place --write_initial_place_file initial.place --post_place_timing_report timing_post_place.rpt > "vpr_output.log" 2>&1
+                $VTR_ROOT/vpr/vpr $ARCH_PATH/$ARCH_NAME ../../$NET_DIR/${NB}.blif --route_chan_width 20 --inner_loop_recompute_divider 1 --save_graphics on --graphics_commands "set_cpd 1; save_graphics cpd1.png;" --seed $NB$RUN --write_timing_summary timing_summary.json -j$NPROC --exit_t 0.05 --write_initial_place_file initial.place --post_place_timing_report timing_post_place.rpt > /dev/null 2> "vpr_errors.log"
                 cd "$pw"
             done
         done
