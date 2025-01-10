@@ -477,16 +477,7 @@ static std::vector<ClusterBlockId> find_centroid_loc(const t_pl_macro& pl_macro,
     if (acc_weight > 0) {
         centroid.x = acc_x / acc_weight;
         centroid.y = acc_y / acc_weight;
-    // #if MARKUS_AT_WORK == 1
-    //     // I will fill empty locations from right to left, against the clock,
-    //     // so starting from the rightmost location seems appropriate
-    //     if (acc_weight * centroid.x < acc_x) {
-    //         centroid.x += 1;
-    //     }
-    //     if (acc_weight * centroid.y < acc_y) {
-    //         centroid.y += 1;
-    //     }
-    // #endif
+
         if (find_layer) {
             auto max_element = std::max_element(layer_count.begin(), layer_count.end());
             VTR_ASSERT((*max_element) != 0);
