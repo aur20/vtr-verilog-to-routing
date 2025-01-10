@@ -15,7 +15,7 @@ class NocCostHandler;
     #if MARKUS_AT_WORK == 1
         #warning "Markus is meddling your codebase"
         // #define MARKUS_STRICTLY_FOLLOW_PATHS
-        // #define MARKUS_PERFORMING
+        #define MARKUS_PERFORMING
     #endif
 #else
     #define MARKUS_AT_WORK 0

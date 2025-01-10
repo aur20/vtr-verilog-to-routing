@@ -477,16 +477,16 @@ static std::vector<ClusterBlockId> find_centroid_loc(const t_pl_macro& pl_macro,
     if (acc_weight > 0) {
         centroid.x = acc_x / acc_weight;
         centroid.y = acc_y / acc_weight;
-    #if MARKUS_AT_WORK == 1
-        // I will fill empty locations from right to left, against the clock,
-        // so starting from the rightmost location seems appropriate
-        if (acc_weight * centroid.x < acc_x) {
-            centroid.x += 1;
-        }
-        if (acc_weight * centroid.y < acc_y) {
-            centroid.y += 1;
-        }
-    #endif
+    // #if MARKUS_AT_WORK == 1
+    //     // I will fill empty locations from right to left, against the clock,
+    //     // so starting from the rightmost location seems appropriate
+    //     if (acc_weight * centroid.x < acc_x) {
+    //         centroid.x += 1;
+    //     }
+    //     if (acc_weight * centroid.y < acc_y) {
+    //         centroid.y += 1;
+    //     }
+    // #endif
         if (find_layer) {
             auto max_element = std::max_element(layer_count.begin(), layer_count.end());
             VTR_ASSERT((*max_element) != 0);
@@ -515,7 +515,7 @@ static bool try_stroobandt_placement(const t_pl_macro& pl_macro,
 
     unplaced_blocks_to_update_their_score = find_centroid_loc(pl_macro, centroid_loc, blk_loc_registry);
 
-    // Put the first block in the mid
+    // Put the first block in center position
     auto& device_ctx = g_vpr_ctx.mutable_device();
     if (centroid_loc.x == OPEN)
         centroid_loc.x = device_ctx.grid.width() >> 1;
@@ -1207,6 +1207,8 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
     std::set<ClusterBlockId> reds;
     std::string redname = "red";
     std::string ioname = "io";
+    std::string clockname = "clk";
+    std::string clockname2 = "clock";
     std::set<ClusterBlockId> blacks;
     std::string blackname = "black";
 
@@ -1317,16 +1319,35 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
     }
 #endif
 
+    // Forward breadth-first search
     for (const auto& blk_id : reds) {
+        std::string blk_name = cluster_ctx.clb_nlist.block_name(blk_id);
+        if (blk_name.find(clockname) != std::string::npos ||
+            blk_name.find(clockname2) != std::string::npos)
+        {
+            continue;
+        }
         VTR_LOG_MARKUS("Going from red node %s to ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
         followToRed(blk_id, 1);
         VTR_LOG_MARKUS("\n");
     }
 
+    // Backpropagation of path lengths
     for (const auto& blk_id : reds) {
         VTR_LOG_MARKUS("Backpropagation from red node %s to ", cluster_ctx.clb_nlist.block_name(blk_id).c_str());
         followLongestBackwards(blk_id);
         VTR_LOG_MARKUS("\n");
+    }
+
+    // Update Red nodes with the longest path
+    for (const auto& blk_id : reds) {
+        for(const auto& child : block_scores[blk_id].children) {
+            if (block_scores[child].path_length > block_scores[blk_id].path_length) {
+                if (std::find(block_scores[child].critical_parents.begin(), block_scores[child].critical_parents.end(), blk_id) != block_scores[child].critical_parents.end()) {
+                    block_scores[blk_id].path_length = block_scores[child].path_length;
+                }
+            }
+        }
     }
 
     size_t max_path_length = 0;
@@ -1352,6 +1373,9 @@ static vtr::vector<ClusterBlockId, t_block_score> assign_block_scores(const Plac
         file << std::endl;
     }
     file.close();
+    for (const auto& blk_id : cluster_ctx.clb_nlist.blocks()) {
+        VTR_LOG_MARKUS("Node %s,\tpath length %d,\tconnectivity %d,\tFAN-In %d\n", cluster_ctx.clb_nlist.block_name(blk_id).c_str(), block_scores[blk_id].path_length, block_scores[blk_id].parents.size() + block_scores[blk_id].children.size(), block_scores[blk_id].parents.size());
+    }
 #endif
     return block_scores;
 }
