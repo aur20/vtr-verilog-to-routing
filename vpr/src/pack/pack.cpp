@@ -21,8 +21,79 @@
 #include "vpr_types.h"
 #include "vtr_assert.h"
 #include "vtr_log.h"
+#include <fstream>
 
 namespace {
+
+/**
+ * @brief Analyzes the properties of all created clusters.
+ *
+ * This function iterates through each cluster and calculates metrics for
+ * the number of atoms, internal connections, and external connections.
+ * This is to be used for Rent-guided packing improvements.
+ *
+ * @param cluster_legalizer The ClusterLegalizer object managing the clusters.
+ * @param prepacker The Prepacker tracking all the molecules in each cluster.
+ * @param atom_nlist The atom netlist for context.
+ */
+static void analyze_clusters(const ClusterLegalizer& cluster_legalizer, const Prepacker& prepacker, const AtomNetlist& atom_nlist) {
+    VTR_LOG("Analyzing %zu created clusters...\n", cluster_legalizer.clusters().size());
+    
+    std::ofstream csv_file("clustering_analysis.csv");
+    csv_file << "Cluster ID,Cluster Name,Type,Atomic Objects,Internal Connections,External Connections\n";
+
+
+    for (LegalizationClusterId cluster_id : cluster_legalizer.clusters()) {
+        if (!cluster_id.is_valid()) continue;
+
+        // 1. Count the number of atomic objects (atoms) in the cluster
+        size_t num_atoms = 0;
+        for (PackMoleculeId mol_id : cluster_legalizer.get_cluster_molecules(cluster_id)) {
+            // A molecule can contain multiple atoms
+            num_atoms += prepacker.get_molecule(mol_id).atom_block_ids.size();
+        }
+
+        // 2. Count internal and external connections
+        size_t internal_connections = 0;
+        size_t external_connections = 0;
+        std::unordered_set<AtomNetId> processed_nets;
+        for (PackMoleculeId mol_id : cluster_legalizer.get_cluster_molecules(cluster_id)) {
+            for (AtomBlockId atom_id : prepacker.get_molecule(mol_id).atom_block_ids) {
+                if (!atom_id.is_valid()) continue;
+
+                for (AtomPinId pin_id : atom_nlist.block_pins(atom_id)) {
+                    AtomNetId net_id = atom_nlist.pin_net(pin_id);
+                    if (!net_id.is_valid() || processed_nets.count(net_id)) continue;
+
+                    bool is_internal = true;
+                    for (AtomPinId net_pin : atom_nlist.net_pins(net_id)) {
+                        AtomBlockId connected_atom = atom_nlist.pin_block(net_pin);
+                        if (cluster_legalizer.get_atom_cluster(connected_atom) != cluster_id) {
+                            is_internal = false;
+                            break;
+                        }
+                    }
+
+                    if (is_internal) {
+                        internal_connections++;
+                    } else {
+                        external_connections++;
+                    }
+
+                    processed_nets.insert(net_id);
+                }
+            }
+        }
+
+        const char* cluster_name_cstr = cluster_legalizer.get_cluster_pb(cluster_id)->name ? cluster_legalizer.get_cluster_pb(cluster_id)->name : "null";
+        csv_file << size_t(cluster_id) << ","
+                 << "\"" << cluster_name_cstr << "\","
+                 << cluster_legalizer.get_cluster_type(cluster_id)->name << ","
+                 << num_atoms << ","
+                 << internal_connections << ","
+                 << external_connections << "\n";
+    } 
+}
 
 /**
  * @brief Enumeration for the state of the packer.
@@ -585,6 +656,7 @@ bool try_pack(const t_packer_opts& packer_opts,
     /******************* Start *************************/
     VTR_LOG("Start the iterative improvement process\n");
     //iteratively_improve_packing(*packer_opts, clustering_data, 2);
+    analyze_clusters(cluster_legalizer, prepacker, atom_ctx.netlist());
     VTR_LOG("the iterative improvement process is done\n");
 
     /*
