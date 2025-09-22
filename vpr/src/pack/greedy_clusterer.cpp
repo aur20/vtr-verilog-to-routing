@@ -346,7 +346,7 @@ LegalizationClusterId GreedyClusterer::try_grow_cluster(PackMoleculeId seed_mol_
     // Since the cluster will no longer be added to beyond this point,
     // clean the cluster of any data not strictly necessary for
     // creating the clustered netlist.
-    cluster_legalizer.clean_cluster(legalization_cluster_id);
+    // cluster_legalizer.clean_cluster(legalization_cluster_id);
 
     // Cluster has been grown successfully.
     return legalization_cluster_id;
