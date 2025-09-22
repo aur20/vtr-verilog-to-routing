@@ -1498,6 +1498,37 @@ e_block_pack_status ClusterLegalizer::add_mol_to_cluster(PackMoleculeId molecule
     return pack_status;
 }
 
+e_block_pack_status ClusterLegalizer::rem_mol_from_cluster(PackMoleculeId molecule_id) {
+
+    LegalizationClusterId cluster_id = molecule_cluster_[molecule_id];
+    VTR_ASSERT(cluster_id.is_valid() && (size_t)cluster_id < legalization_clusters_.size());
+    std::vector<PackMoleculeId> molecules(get_cluster_molecules(cluster_id));
+    VTR_LOG("Remaining molecules: %u\n", molecules.size());
+    auto it = std::find(molecules.begin(), molecules.end(), molecule_id);
+    if (it == molecules.end()) {
+        VTR_LOG_ERROR("Molecule %d is not in cluster %d, cannot remove it.\n", molecule_id, cluster_id);
+        return e_block_pack_status::BLK_FAILED_FEASIBLE;
+    }
+    molecules.erase(it);
+    t_logical_block_type_ptr type = get_cluster_type(cluster_id);
+    int mode = get_cluster_pb(cluster_id)->mode;
+    destroy_cluster(cluster_id);
+    compress();
+    if (molecules.size() == 0) {
+        return e_block_pack_status::BLK_PASSED;
+    }    
+    VTR_LOG("Remaining molecules: %u\n", molecules.size());
+    auto [status, new_cluster_id] = start_new_cluster(*molecules.begin(), type, mode);
+    molecules.erase(molecules.begin());
+    if (molecules.size()) {
+        for (auto& mol : molecules) {
+            status = add_mol_to_cluster(mol, new_cluster_id);
+        }
+    }
+    VTR_ASSERT(check_cluster_legality(new_cluster_id) && "Cluster should be legal after removing a molecule");
+    return status;
+}
+                                         
 void ClusterLegalizer::destroy_cluster(LegalizationClusterId cluster_id) {
     // Safety asserts to make sure the inputs are valid.
     VTR_ASSERT_SAFE(cluster_id.is_valid() && (size_t)cluster_id < legalization_clusters_.size());

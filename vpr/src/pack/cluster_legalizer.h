@@ -322,6 +322,8 @@ class ClusterLegalizer {
     e_block_pack_status add_mol_to_cluster(PackMoleculeId molecule_id,
                                            LegalizationClusterId cluster_id);
 
+    e_block_pack_status rem_mol_from_cluster(PackMoleculeId molecule_id);
+
     /*
      * @brief Destroy the given cluster.
      *

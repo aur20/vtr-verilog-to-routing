@@ -585,6 +585,43 @@ bool try_pack(const t_packer_opts& packer_opts,
     /******************* Start *************************/
     VTR_LOG("Start the iterative improvement process\n");
     //iteratively_improve_packing(*packer_opts, clustering_data, 2);
+
+    // Remove random molecule from cluster
+    PackMoleculeId molecule;
+    int i = 0;
+    for (auto m : prepacker.molecules()) {
+        molecule = m;
+        if (i == 105)
+            break;
+        i++;
+    }
+    
+    LegalizationClusterId cluster_id = cluster_legalizer.get_atom_cluster(prepacker.get_molecule_root_atom(molecule));
+    VTR_LOG("Found molecule from cluster with %d mols\n", cluster_legalizer.get_cluster_molecules(cluster_id).size());
+    t_logical_block_type_ptr type = cluster_legalizer.get_cluster_type(cluster_id);
+    int mode = cluster_legalizer.get_cluster_pb(cluster_id)->mode;
+    cluster_legalizer.rem_mol_from_cluster(molecule);
+
+    bool found_new_cluster = false;
+    for (LegalizationClusterId c : cluster_legalizer.clusters()) {
+        VTR_LOG("Cluster %u has %zu molecules\n", c, cluster_legalizer.get_cluster_molecules(c).size());
+        fflush(stdout);
+        if (cluster_legalizer.is_molecule_compatible(molecule, c)) {
+                VTR_LOG("Molecule is compatible with next cluster\n");
+                if (cluster_legalizer.add_mol_to_cluster(molecule, c) == e_block_pack_status::BLK_PASSED) {
+                    VTR_LOG("Added molecule to next cluster %u\n", c);
+                    found_new_cluster = true;
+                    break;
+            }
+        }
+    }
+    if (!found_new_cluster) {
+        //put it back
+        VTR_LOG("Could not find a new cluster for the molecule, putting it back\n");
+        auto [status, cluster_id] = cluster_legalizer.start_new_cluster(molecule, type, mode);
+        cluster_legalizer.check_cluster_legality(cluster_id);
+    }
+    
     VTR_LOG("the iterative improvement process is done\n");
 
     /*
