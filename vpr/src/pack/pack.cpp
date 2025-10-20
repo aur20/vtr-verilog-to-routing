@@ -2,6 +2,7 @@
 #include "pack.h"
 
 #include <unordered_set>
+#include <fstream>
 #include "PreClusterTimingManager.h"
 #include "setup_grid.h"
 #include "appack_context.h"
@@ -585,6 +586,186 @@ bool try_pack(const t_packer_opts& packer_opts,
     /******************* Start *************************/
     VTR_LOG("Start the iterative improvement process\n");
     //iteratively_improve_packing(*packer_opts, clustering_data, 2);
+    std::ofstream report("report.json");
+    report << "[";
+    bool first_cluster = true;
+    for (auto const& cluster_id : cluster_legalizer.clusters()) {
+        if (!first_cluster) {
+            report << ",";
+        }
+        first_cluster = false;
+
+        const t_pb* pb_inst = cluster_legalizer.get_cluster_pb(cluster_id);
+        std::map<std::string, std::pair<int, int>> primitives; // type -> {used, total}
+        std::map<std::string, std::pair<int, int>> interconnects;
+        std::map<std::string, std::pair<int, int>> io_pins;
+
+        // std::function<void(const t_pb*, int)> find_usage =
+        //     [&](const t_pb* pb, int occurance) {
+
+        //         t_pb_graph_node* pb_graph_node = pb->pb_graph_node;
+        //         t_pb_type* pb_type = pb_graph_node->pb_type;
+        //         t_mode* mode = &pb_type->modes[pb->mode];
+        //         std::string pb_type_name(pb_type->name);
+
+        //         if (!pb_type->is_primitive()) {
+
+        //             // Only count the mode->interconnect[] for the top pb
+        //             if (mode->interconnect && pb == pb_inst) {
+        //                 for (int i = 0; i < mode->num_interconnect; ++i) {
+        //                     const t_interconnect& interc = mode->interconnect[i];
+        //                     std::string type_str;
+        //                     switch (interc.type) {
+        //                         case DIRECT_INTERC:
+        //                             type_str = "direct";
+        //                             break;
+        //                         case MUX_INTERC:
+        //                             type_str = "mux";
+        //                             break;
+        //                         case COMPLETE_INTERC:
+        //                             type_str = "complete";
+        //                             break;
+        //                         default:
+        //                             type_str = "unknown";
+        //                             break;
+        //                     }
+        //                     interconnects[type_str].first++;
+        //                 }
+        //             }
+        //             if (pb == pb_inst) {
+        //             for (auto& kv : pb->pb_route) {
+        //                 const t_pb_route& route = kv.second;
+        //                 const t_pb_graph_pin* pin = route.pb_graph_pin;
+
+        //                 if (route.driver_pb_pin_id != -1) {
+        //                     // Retrieve the driver pin
+        //                     const t_pb_graph_pin* driver_pin = pb->pb_route[route.driver_pb_pin_id].pb_graph_pin;
+
+        //                     // For each input edge of the sink pin, see if the driver matches
+        //                     for (int e = 0; e < pin->num_input_edges; ++e) {
+        //                         const t_pb_graph_edge* edge = pin->input_edges[e];
+        //                         // for (int p = 0; p < edge->num_input_pins; ++p) {
+        //                             if (edge->input_pins[p] == driver_pin) {
+        //                                 if (edge->interconnect) {
+        //                                     std::string type_str;
+        //                                     switch (edge->interconnect->type) {
+        //                                         case DIRECT_INTERC:   type_str = "direct"; break;
+        //                                         case MUX_INTERC:      type_str = "mux"; break;
+        //                                         case COMPLETE_INTERC: type_str = "complete"; break;
+        //                                         default:              type_str = "unknown"; break;
+        //                                     }
+        //                                     interconnects[type_str].second++;
+        //                                 }
+        //                             }
+        //                         // }
+        //                     }
+        //                 }
+        //             }
+        //         }
+
+        //             for (int i = 0; i < mode->num_pb_type_children; i++) {
+        //                 for (int j = 0; j < mode->pb_type_children[i].num_pb; j++) {
+        //                     if (pb->child_pbs[i] && pb->child_pbs[i][j].name) {
+        //                         find_usage(&pb->child_pbs[i][j], occurance * mode->pb_type_children[i].num_pb);
+        //                     }
+        //                 }
+        //             }
+        //         } else {
+        //             primitives[pb_type_name].first++;
+        //             primitives[pb_type_name].second = occurance; 
+        //             // VTR_LOG("%d-%d ", mode->pb_type_children[i].num_pb, pb_graph_node->total_primitive_count);
+        //         }
+        //     };
+
+        // Stats for primitive usage
+        std::function<void(const t_pb*, int)> max_usage =
+            [&](const t_pb* pb, int occurance) {
+
+                t_pb_graph_node* pb_graph_node = pb->pb_graph_node;
+                t_pb_type* pb_type = pb_graph_node->pb_type;
+                t_mode* mode = pb->get_mode();
+                std::string pb_type_name(pb_type->name);
+
+                if (!pb->is_primitive()) {
+
+                    for (int i = 0; i < mode->num_pb_type_children; i++) {
+                        for (int j = 0; j < mode->pb_type_children[i].num_pb; j++) {
+                            if (pb->child_pbs[i] && pb->child_pbs[i][j].name) {
+                                max_usage(&pb->child_pbs[i][j], occurance * mode->pb_type_children[i].num_pb);
+                            }
+                        }
+                    }
+                } else {
+                    primitives[pb_type_name].first++;
+                    // Recursion will only find available instances, so for each depth sum the maximum occurance
+                    primitives[pb_type_name].second = std::max(primitives[pb_type_name].second, occurance);
+                }
+        };
+        max_usage(pb_inst, 1);
+        interconnects["routes"].second = pb_inst->pb_graph_node->total_pb_pins;
+        const t_pb_graph_node* pb_gnode = pb_inst->pb_graph_node;
+        int used_pins_count = 0;
+        for (auto& kv : pb_inst->pb_route) { // All the possible routes inside pb
+            const t_pb_route& route = kv.second;
+            if (route.driver_pb_pin_id != -1) { // Which have actual driver
+                interconnects["routes"].first++;
+            }
+            if (route.atom_net_id && route.pb_graph_pin->parent_node == pb_gnode) {
+                used_pins_count++;
+            }
+        }
+
+        int total_pins_count = 0;
+        // Sum pins from input ports
+        for (int i = 0; i < pb_gnode->num_input_ports; i++) {
+            total_pins_count += pb_gnode->num_input_pins[i];
+        }
+
+        // Sum pins from output ports
+        for (int i = 0; i < pb_gnode->num_output_ports; i++) {
+            total_pins_count += pb_gnode->num_output_pins[i];
+        }
+
+        // Sum pins from clock ports
+        for (int i = 0; i < pb_gnode->num_clock_ports; i++) {
+            total_pins_count += pb_gnode->num_clock_pins[i];
+        }
+
+        report << "{";
+        report << "\"cluster\": \"" << pb_inst->name << "\",";
+        report << "\"mode\": \"" << pb_inst->get_mode()->name << "\",";
+        report << "\"used_pins\": \"" << used_pins_count << "\",";
+        report << "\"total_pins\": \"" << total_pins_count << "\",";
+        report << "\"primitives\": {";
+        bool first_primitive = true;
+        for (auto const& [type, stats]: primitives) {
+            if (!first_primitive) {
+                report << ",";
+            }
+            first_primitive = false;
+            report << "\"" << type << "\": {";
+            report << "\"used\": " << stats.first << ",";
+            report << "\"total\": " << stats.second;
+            report << "}";
+        }
+        report << "}, \"interconnects\": {";
+        first_primitive = true;
+        for (auto const& [type, stats]: interconnects) {
+            if (!first_primitive) {
+                report << ",";
+            }
+            first_primitive = false;
+            report << "\"" << type << "\": {";
+            report << "\"used\": " << stats.first << ",";
+            report << "\"total\": " << stats.second;
+            report << "}";
+        }
+        report << "}";
+        report << "}";
+    }
+    report << "]";
+    report.close();
+
     VTR_LOG("the iterative improvement process is done\n");
 
     /*
