@@ -263,6 +263,16 @@ struct DeviceContext : public Context {
 
     int delayless_switch_idx = UNDEFINED;
 
+    /// Stores the number of CHANX wire segments in each routing channel segment at [layer][x][y]
+    vtr::NdMatrix<int, 3> rr_chanx_segment_width;
+    /// Stores the number of CHANY wire segments in each routing channel segment at [layer][x][y]
+    vtr::NdMatrix<int, 3> rr_chany_segment_width;
+
+    /// Stores the maximum channel segment width in each horizontal channel
+    std::vector<int> rr_chanx_width;
+    /// Stores the maximum channel segment width in each vertical channel
+    std::vector<int> rr_chany_width;
+
     bool rr_graph_is_flat = false;
 
     /*
@@ -280,7 +290,7 @@ struct DeviceContext : public Context {
      * map key: num of all possible fanin of that type of switch on chip
      * map value: remapped switch index (index in rr_switch_inf)
      */
-    std::vector<std::map<int, int>> switch_fanin_remap;
+    t_arch_switch_fanin switch_fanin_remap;
 
     /*******************************************************************
      * Architecture

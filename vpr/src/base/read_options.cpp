@@ -2323,7 +2323,7 @@ argparse::ArgumentParser create_arg_parser(const std::string& prog_name, t_optio
             "\tequilibrium: Estimates the initial temperature by trying to "
             "predict the equilibrium temperature for the initial placement "
             "(i.e. the temperature that would result in no change in cost).")
-        .default_value("cost_variance")
+        .default_value("equilibrium")
         .show_in(argparse::ShowIn::HELP_ONLY);
 
     place_grp.add_argument(args.PlaceInitT, "--init_t")
@@ -2846,12 +2846,6 @@ argparse::ArgumentParser create_arg_parser(const std::string& prog_name, t_optio
 
     route_grp.add_argument<int>(args.route_verbosity, "--route_verbosity")
         .help("Controls the verbosity of routing's output. Higher values produce more output (useful for debugging routing problems)")
-        .default_value("1")
-        .show_in(argparse::ShowIn::HELP_ONLY);
-    route_grp.add_argument(args.custom_3d_sb_fanin_fanout, "--custom_3d_sb_fanin_fanout")
-        .help(
-            "Specifies the number of tracks that can drive a 3D switch block connection"
-            "and the number of tracks that can be driven by a 3D switch block connection")
         .default_value("1")
         .show_in(argparse::ShowIn::HELP_ONLY);
 

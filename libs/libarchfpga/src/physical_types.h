@@ -32,7 +32,6 @@
 #include <unordered_map>
 #include <string>
 #include <map>
-#include <unordered_map>
 #include <limits>
 #include <unordered_set>
 
@@ -242,7 +241,7 @@ enum e_power_estimation_method_ {
     POWER_METHOD_SPECIFY_SIZES,   /* Transistor-level, user-specified buffers/wires */
     POWER_METHOD_TOGGLE_PINS,     /* Dynamic: Energy per pin toggle, Static: Absolute */
     POWER_METHOD_C_INTERNAL,      /* Dynamic: Equiv. Internal capacitance, Static: Absolute */
-    POWER_METHOD_ABSOLUTE         /* Dynamic: Aboslute, Static: Absolute */
+    POWER_METHOD_ABSOLUTE         /* Dynamic: Absolute, Static: Absolute */
 };
 typedef enum e_power_estimation_method_ e_power_estimation_method;
 typedef enum e_power_estimation_method_ t_power_estimation_method;
@@ -340,7 +339,7 @@ enum class PortEquivalence {
  *           class.                                                *
  * pinlist[]:  List of clb pin numbers which belong to this class. */
 struct t_class {
-    enum e_pin_type type;
+    e_pin_type type;
     PortEquivalence equivalence;
     int num_pins;
     std::vector<int> pinlist; /* [0..num_pins - 1] */
@@ -971,7 +970,7 @@ struct t_pb_type {
     int num_pb = 0;
     char* blif_model = nullptr;
     LogicalModelId model_id;
-    enum e_pb_type_class class_type = UNKNOWN_CLASS;
+    e_pb_type_class class_type = UNKNOWN_CLASS;
 
     t_mode* modes = nullptr; /* [0..num_modes-1] */
     int num_modes = 0;
@@ -1074,8 +1073,8 @@ struct t_pin_to_pin_annotation {
 
     std::vector<std::pair<int, std::string>> annotation_entries;
 
-    enum e_pin_to_pin_annotation_type type;
-    enum e_pin_to_pin_annotation_format format;
+    e_pin_to_pin_annotation_type type;
+    e_pin_to_pin_annotation_format format;
 
     char* input_pins;
     char* output_pins;
@@ -1111,7 +1110,7 @@ struct t_pin_to_pin_annotation {
  *      parent_mode_index: Mode of parent as int
  */
 struct t_interconnect {
-    enum e_interconnect type;
+    e_interconnect type;
     char* name;
 
     char* input_string;
@@ -1532,21 +1531,23 @@ struct t_pb_graph_pin_power {
 /* FPGA Routing architecture                                                                     */
 /*************************************************************************************************/
 
-/* Description of routing channel distribution across the FPGA, only available for global routing
- * Width is standard dev. for Gaussian.  xpeak is where peak     *
- * occurs. dc is the dc offset for Gaussian and pulse waveforms. */
-enum e_stat {
+/// @brief Description of routing channel distribution across the FPGA, only available for global routing
+enum class e_stat {
     UNIFORM,
     GAUSSIAN,
     PULSE,
     DELTA
 };
+
+/// @brief Parameters describing a channel distribution.
+/// @note  If detailed routing is performed, only a uniform (all channels in a given direction are the same width)
+/// distribution is supported.
 struct t_chan {
-    enum e_stat type;
-    float peak;
-    float width;
-    float xpeak;
-    float dc;
+    e_stat type; ///< Distribution type
+    float peak;  ///< Peak value. For a UNIFORM distribution, this is the value for all channels (in a given direction).
+    float width; ///< Standard deviation (Gaussian)
+    float xpeak; ///< Peak location (Gaussian)
+    float dc;    ///< DC offset (Gaussian, pulse)
 };
 
 /* chan_x_dist: Describes the x-directed channel width distribution.         *
@@ -1571,28 +1572,6 @@ enum class SegResType {
 
 /// String versions of segment resource types
 constexpr std::array<const char*, static_cast<size_t>(SegResType::NUM_RES_TYPES)> RES_TYPE_STRING{"GCLK", "GENERAL"};
-
-/// Defines the type of switch block used in FPGA routing.
-enum e_switch_block_type {
-    /// If the type is SUBSET, I use a Xilinx-like switch block where track i in one channel always
-    /// connects to track i in other channels.
-    SUBSET,
-
-    /// If type is WILTON, I use a switch block where track i
-    /// does not always connect to track i in other channels.
-    /// See Steve Wilton, PhD Thesis, University of Toronto, 1996.
-    WILTON,
-
-    /// The UNIVERSAL switch block is from Y. W. Chang et al, TODAES, Jan. 1996, pp. 80 - 101.
-    UNIVERSAL,
-
-    /// The FULL switch block type allows for complete connectivity between tracks.
-    FULL,
-
-    /// A CUSTOM switch block has also been added which allows a user to describe custom permutation functions and connection patterns.
-    /// See comment at top of SRC/route/build_switchblocks.c
-    CUSTOM
-};
 
 enum e_Fc_type {
     ABSOLUTE,
@@ -1632,14 +1611,14 @@ struct t_segment_inf {
      * specified in the architecture file. If -1, this value was not set in the
      * architecture file and arch_wire_switch should be used for "DEC_DIR" wire segments.
      */
-    short arch_wire_switch_dec = -1;
+    short arch_wire_switch_dec = ARCH_FPGA_UNDEFINED_VAL;
 
     /**
      * @brief Same as arch_opin_switch but used only for decremental tracks if
      * it is specified in the architecture file. If -1, this value was not set in
      * the architecture file and arch_opin_switch should be used for "DEC_DIR" wire segments.
      */
-    short arch_opin_switch_dec = -1;
+    short arch_opin_switch_dec = ARCH_FPGA_UNDEFINED_VAL;
 
     /**
      * @brief Index of the switch type that connects output pins (OPINs) to this
@@ -1647,7 +1626,7 @@ struct t_segment_inf {
      * the switches from the architecture file, not the expanded list of switches
      * that is built at the end of build_rr_graph.
      */
-    short arch_inter_die_switch = -1;
+    short arch_inter_die_switch = ARCH_FPGA_UNDEFINED_VAL;
 
     /**
      * @brief The fraction of logic blocks along its length to which this segment can connect.
@@ -1669,7 +1648,7 @@ struct t_segment_inf {
     ///  The capacitance of a routing track, per unit logic block length.
     float Cmetal;
 
-    enum e_directionality directionality;
+    e_directionality directionality;
 
     /**
      * @brief Defines what axis the segment is parallel to. See e_parallel_axis
@@ -1727,7 +1706,6 @@ inline bool operator==(const t_segment_inf& a, const t_segment_inf& b) {
            && a.length == b.length
            && a.arch_wire_switch == b.arch_wire_switch
            && a.arch_opin_switch == b.arch_opin_switch
-           && a.arch_inter_die_switch == b.arch_inter_die_switch
            && a.frac_cb == b.frac_cb
            && a.frac_sb == b.frac_sb
            && a.longline == b.longline
@@ -1752,16 +1730,23 @@ struct t_hash_segment_inf {
         return result;
     }
 };
-enum class SwitchType {
-    MUX = 0,   //A configurable (buffered) mux (single-driver)
-    TRISTATE,  //A configurable tristate-able buffer (multi-driver)
-    PASS_GATE, //A configurable pass transistor switch (multi-driver)
-    SHORT,     //A non-configurable electrically shorted connection (multi-driver)
-    BUFFER,    //A non-configurable non-tristate-able buffer (uni-driver)
-    INVALID,   //Unspecified, usually an error
+
+/// @brief Enumerates switch types used in the FPGA architecture and RR graph.
+enum class e_switch_type {
+    MUX = 0,   ///< A configurable (buffered) mux (single-driver)
+    TRISTATE,  ///< A configurable tristate-able buffer (multi-driver)
+    PASS_GATE, ///< A configurable pass transistor switch (multi-driver)
+    SHORT,     ///< A non-configurable electrically shorted connection (multi-driver)
+    BUFFER,    ///< A non-configurable non-tristate-able buffer (uni-driver)
+    INVALID,   ///< Unspecified, usually an error
     NUM_SWITCH_TYPES
 };
-constexpr std::array<const char*, size_t(SwitchType::NUM_SWITCH_TYPES)> SWITCH_TYPE_STRINGS = {{"MUX", "TRISTATE", "PASS_GATE", "SHORT", "BUFFER", "INVALID"}};
+
+constexpr std::array<const char*, size_t(e_switch_type::NUM_SWITCH_TYPES)> SWITCH_TYPE_STRINGS = {{"MUX", "TRISTATE", "PASS_GATE", "SHORT", "BUFFER", "INVALID"}};
+
+bool switch_type_is_buffered(e_switch_type type);
+bool switch_type_is_configurable(e_switch_type type);
+e_directionality switch_type_directionality(e_switch_type type);
 
 /* Constant/Reserved names for switches in architecture XML
  * Delayless switch:
@@ -1777,7 +1762,7 @@ constexpr const char* VPR_DELAYLESS_SWITCH_NAME = "__vpr_delayless_switch__";
 /* An intracluster switch automatically added to the RRG by the flat router. */
 constexpr const char* VPR_INTERNAL_SWITCH_NAME = "__vpr_intra_cluster_switch__";
 
-enum class BufferSize {
+enum class e_buffer_size {
     AUTO,
     ABSOLUTE
 };
@@ -1820,7 +1805,7 @@ struct t_arch_switch_inf {
     float Cinternal = 0.;
     /// The area of each transistor in the segment's driving mux measured in minimum width transistor units
     float mux_trans_size = 1.;
-    BufferSize buf_size_type = BufferSize::AUTO;
+    e_buffer_size buf_size_type = e_buffer_size::AUTO;
     /// The area of the buffer. If set to zero, area should be calculated from R
     float buf_size = 0.;
     e_power_buffer_type power_buffer_type = POWER_BUFFER_TYPE_AUTO;
@@ -1830,7 +1815,7 @@ struct t_arch_switch_inf {
 
   public:
     //Returns the type of switch
-    SwitchType type() const;
+    e_switch_type type() const;
 
     //Returns true if this switch type isolates its input and output into
     //separate DC-connected subcircuits
@@ -1850,10 +1835,10 @@ struct t_arch_switch_inf {
 
   public:
     void set_Tdel(int fanin, float delay);
-    void set_type(SwitchType type_val);
+    void set_type(e_switch_type type_val);
 
   private:
-    SwitchType type_ = SwitchType::INVALID;
+    e_switch_type type_ = e_switch_type::INVALID;
 
     /**
      * @brief   Maps the number of inputs to a delay.
@@ -1866,75 +1851,6 @@ struct t_arch_switch_inf {
     std::map<int, double> Tdel_map_;
 
     friend void PrintArchInfo(FILE*, const t_arch*);
-};
-
-/* Lists all the important information about an rr switch type.              *
- * The s_rr_switch_inf describes a switch derived from a switch described    *
- * by s_arch_switch_inf. This indirection allows us to vary properties of a  *
- * given switch, such as varying delay with switch fan-in.                   *
- * buffered:  Does this switch isolate it's input/output into separate       *
- *            DC-connected sub-circuits?                                     *
- * configurable: Is this switch is configurable (i.e. can the switch can be  *
- *               turned on or off)?. This allows modelling of non-optional   *
- *               switches (e.g. fixed buffers, or shorted connections) which *
- *               must be used (e.g. expanded by the router) if a connected   *
- *               segment is used.                                            *
- * R:  Equivalent resistance of the buffer/switch.                           *
- * Cin:  Input capacitance.                                                  *
- * Cout:  Output capacitance.                                                *
- * Cinternal: Internal capacitance, see the definition above.                *
- * Tdel:  Intrinsic delay.  The delay through an unloaded switch is          *
- *        Tdel + R * Cout.                                                   *
- * mux_trans_size:  The area of each transistor in the segment's driving mux *
- *                  measured in minimum width transistor units               *
- * buf_size:  The area of the buffer. If set to zero, area should be         *
- *            calculated from R
- * intra_tile: Indicate whether this rr_switch is a switch type used inside  *
- *             clusters. These switch types are not specified in the         *
- *             architecture description file and are added when flat router  *
- *             is enabled                                                    */
-struct t_rr_switch_inf {
-    float R = 0.;
-    float Cin = 0.;
-    float Cout = 0.;
-    float Cinternal = 0.;
-    float Tdel = 0.;
-    float mux_trans_size = 0.;
-    float buf_size = 0.;
-    std::string name;
-    e_power_buffer_type power_buffer_type = POWER_BUFFER_TYPE_UNDEFINED;
-    float power_buffer_size = 0.;
-
-    bool intra_tile = false;
-
-  public:
-    /// Returns the type of switch
-    SwitchType type() const;
-
-    /// Returns true if this switch type isolates its input and output into
-    /// separate DC-connected subcircuits
-    bool buffered() const;
-
-    /// Returns true if this switch type is configurable
-    bool configurable() const;
-
-    bool operator==(const t_rr_switch_inf& other) const;
-
-    /**
-     * @brief Functor for computing a hash value for t_rr_switch_inf.
-     *
-     * This custom hasher enables the use of t_rr_switch_inf objects as keys
-     * in unordered containers such as std::unordered_map or std::unordered_set.
-     */
-    struct Hasher {
-        std::size_t operator()(const t_rr_switch_inf& s) const;
-    };
-
-  public:
-    void set_type(SwitchType type_val);
-
-  private:
-    SwitchType type_ = SwitchType::INVALID;
 };
 
 /**

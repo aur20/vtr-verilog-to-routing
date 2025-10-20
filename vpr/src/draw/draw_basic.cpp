@@ -12,11 +12,9 @@
 
 #include "physical_types_util.h"
 #include "vtr_assert.h"
-#include "vtr_ndoffsetmatrix.h"
 #include "vtr_color_map.h"
 
 #include "vpr_utils.h"
-#include "vpr_error.h"
 
 #include "globals.h"
 #include "draw_color.h"
@@ -29,6 +27,7 @@
 #include "move_utils.h"
 #include "route_export.h"
 #include "tatum/report/TimingPathCollector.hpp"
+#include "partial_placement.h"
 
 //To process key presses we need the X11 keysym definitions,
 //which are unavailable when building with MINGW
@@ -165,9 +164,7 @@ void drawplace(ezgl::renderer* g) {
                         if (draw_state->draw_block_text) {
                             /* Draw text if the space has parts of the netlist */
                             if (bnum) {
-                                std::string name = cluster_ctx.clb_nlist.block_name(
-                                                       bnum)
-                                                   + vtr::string_fmt(" (#%zu)", size_t(bnum));
+                                std::string name = cluster_ctx.clb_nlist.block_name(bnum) + vtr::string_fmt(" (#%zu)", size_t(bnum));
 
                                 g->draw_text(center, name.c_str(), abs_clb_bbox.width(),
                                              abs_clb_bbox.height());
@@ -190,6 +187,56 @@ void drawplace(ezgl::renderer* g) {
                 }
             }
         }
+    }
+}
+
+void draw_analytical_place(ezgl::renderer* g) {
+    // Draw a tightly packed view of the device grid using only device context info.
+    t_draw_state* draw_state = get_draw_state_vars();
+    const DeviceContext& device_ctx = g_vpr_ctx.device();
+
+    g->set_line_dash(ezgl::line_dash::none);
+    g->set_line_width(0);
+
+    int total_layers = device_ctx.grid.get_num_layers();
+    for (int layer = 0; layer < total_layers; ++layer) {
+        const auto& layer_disp = draw_state->draw_layer_display[layer];
+        if (!layer_disp.visible) continue;
+
+        for (int x = 0; x < (int)device_ctx.grid.width(); ++x) {
+            for (int y = 0; y < (int)device_ctx.grid.height(); ++y) {
+                if (device_ctx.grid.is_root_location({x, y, layer}) == false) continue;
+                t_physical_tile_type_ptr type = device_ctx.grid.get_physical_type({x, y, layer});
+                if (type->capacity == 0) continue;
+
+                ezgl::point2d bl{static_cast<double>(x), static_cast<double>(y)};
+                ezgl::point2d tr{static_cast<double>(x + type->width), static_cast<double>(y + type->height)};
+
+                ezgl::color fill_color = get_block_type_color(type);
+                g->set_color(fill_color, layer_disp.alpha);
+                g->fill_rectangle(bl, tr);
+
+                if (draw_state->draw_block_outlines) {
+                    g->set_color(ezgl::BLACK, layer_disp.alpha);
+                    g->draw_rectangle(bl, tr);
+                }
+            }
+        }
+    }
+
+    const double half_size = 0.05;
+
+    const PartialPlacement* ap_pp = draw_state->get_ap_partial_placement_ref();
+    // The reference should be set in the beginning of analytial placement.
+    VTR_ASSERT(ap_pp != nullptr);
+    for (const auto& [blk_id, x] : ap_pp->block_x_locs.pairs()) {
+        double y = ap_pp->block_y_locs[blk_id];
+
+        ezgl::point2d bl{x - half_size, y - half_size};
+        ezgl::point2d tr{x + half_size, y + half_size};
+
+        g->set_color(ezgl::BLACK);
+        g->fill_rectangle(bl, tr);
     }
 }
 
@@ -272,7 +319,7 @@ void draw_congestion(ezgl::renderer* g) {
     //Record min/max congestion
     float min_congestion_ratio = 1.;
     float max_congestion_ratio = min_congestion_ratio;
-    auto congested_rr_nodes = collect_congested_rr_nodes();
+    std::vector<RRNodeId> congested_rr_nodes = collect_congested_rr_nodes();
     for (RRNodeId inode : congested_rr_nodes) {
         short occ = route_ctx.rr_node_route_inf[inode].occ();
         short capacity = rr_graph.node_capacity(inode);
@@ -333,7 +380,7 @@ void draw_congestion(ezgl::renderer* g) {
 
     //Draw each congested node
     for (RRNodeId inode : congested_rr_nodes) {
-        int layer_num = rr_graph.node_layer(inode);
+        int layer_num = rr_graph.node_layer_low(inode);
         int transparency_factor = get_rr_node_transparency(inode);
         if (!draw_state->draw_layer_display[layer_num].visible)
             continue;
@@ -663,8 +710,8 @@ bool is_edge_valid_to_draw(RRNodeId current_node, RRNodeId prev_node) {
     t_draw_state* draw_state = get_draw_state_vars();
     const RRGraphView& rr_graph = g_vpr_ctx.device().rr_graph;
 
-    int current_node_layer = rr_graph.node_layer(current_node);
-    int prev_node_layer = rr_graph.node_layer(prev_node);
+    int current_node_layer = rr_graph.node_layer_low(current_node);
+    int prev_node_layer = rr_graph.node_layer_low(prev_node);
 
     if (!(is_inter_cluster_node(rr_graph, current_node)) || !(is_inter_cluster_node(rr_graph, prev_node))) {
         return false;

@@ -767,11 +767,11 @@ t_swap_result PlacementAnnealer::try_swap_(MoveGenerator& move_generator,
     }
     move_outcome_stats.outcome = move_outcome;
 
-    // If we force a router block move then it was not proposed by the
-    // move generator, so we should not calculate the reward and update
+    // If we force a router block move or manual move then it was not proposed
+    // by the move generator, so we should not calculate the reward and update
     // the move generators status since this outcome is not a direct
-    // consequence of the move generator
-    if (!router_block_move) {
+    // consequence of the move generator.
+    if (!router_block_move && !manual_move_enabled) {
         move_generator.calculate_reward_and_process_outcome(move_outcome_stats, delta_c, REWARD_BB_TIMING_RELATIVE_WEIGHT);
     }
 
@@ -830,6 +830,14 @@ void PlacementAnnealer::placement_inner_loop() {
 
     // Inner loop begins
     for (int inner_iter = 0, inner_crit_iter_count = 1; inner_iter < annealing_state_.move_lim; inner_iter++) {
+#ifndef NO_GRAPHICS
+        // Checks manual move flag for manual move feature
+        t_draw_state* draw_state = get_draw_state_vars();
+        if (draw_state->show_graphics) {
+            manual_move_enabled = manual_move_is_selected();
+        }
+#endif /*NO_GRAPHICS*/
+
         t_swap_result swap_result = try_swap_(move_generator, placer_opts_.place_algorithm, manual_move_enabled);
 
         if (swap_result.move_result == e_move_result::ACCEPTED) {
@@ -889,6 +897,11 @@ void PlacementAnnealer::placement_inner_loop() {
             ++inner_placement_save_count;
         }
     }
+
+#ifdef VPR_USE_SIGACTION
+    // Save the block locations after each inner loop for checkpointing.
+    g_vpr_ctx.mutable_placement().mutable_block_locs() = placer_state_.block_locs();
+#endif
 
     // Calculate the success_rate and std_dev of the costs.
     placer_stats_.calc_iteration_stats(costs_, annealing_state_.move_lim);
